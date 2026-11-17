@@ -44,7 +44,9 @@ Done when: 10 songs in a row play without a 403 error.
 
 - [x] Translate the Trop parsers: Home, Explore, Search, album, artist, playlist, podcast
 - [x] Sidebar, Home with real covers, player bar that plays a clicked song
-- [ ] Search, Explore, album/artist/playlist pages, queue, now playing
+- [x] Search, Explore with mood pages, album/artist/playlist pages, back button that restores the scroll position
+- [x] Queue: a click plays its list from that song; next, previous, auto-advance at the song's end
+- [ ] Podcast page, now playing view, queue panel
 
 Done when: every page opens from real data and starts playback.
 

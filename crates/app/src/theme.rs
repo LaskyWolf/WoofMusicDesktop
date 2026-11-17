@@ -11,9 +11,12 @@ pub const HOVER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
 pub const CLOSE: Color = rgb(0xE5, 0x48, 0x4D);
 pub const CLOSE_PRESSED: Color = rgb(0xC4, 0x36, 0x3B);
-/// Dark tint over the glass, so white text on it keeps its contrast.
+/// WoofMusic teal: the playing song, focus rings, the Play button.
+pub const ACCENT: Color = rgb(0x45, 0xBF, 0xB3);
+pub const ACCENT_HOVER: Color = rgb(0x5C, 0xD1, 0xC5);
 /// Cover placeholder while the image downloads.
 pub const PLACEHOLDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
+/// Dark tint over the glass, so white text on it keeps its contrast.
 pub const GLASS_TINT: Color = Color::from_rgba(0.08, 0.08, 0.09, 0.55);
 
 pub const INSET: f32 = 12.0;
