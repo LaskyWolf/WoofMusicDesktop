@@ -1,0 +1,10 @@
+[package]
+name = "woofmusic"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+iced = { version = "0.14", features = ["wgpu", "tokio", "image", "svg", "advanced"] }
+png = "0.18"
+tokio = { version = "1", features = ["time"] }

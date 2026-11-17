@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- WoofMusic app icon, dark appearance (Trop/App Icons/AppIcon.icon in the WoofMusic repository). -->
+  <defs>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2C2C33"/>
+      <stop offset="1" stop-color="#17171C"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#fill)"/>
+  <rect x="64.5" y="64.5" width="895" height="895" rx="199.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <g transform="translate(512 512) scale(0.875) translate(-512 -512)">
+    <path d="M 406 260 L 750 192 Q 774 187 774 212 V 652 C 774 720 712 770 650 770 C 590 770 550 737 550 692 C 550 641 600 600 660 600 C 677 600 694 603 710 608 V 354 L 446 406 V 724 C 446 792 384 842 322 842 C 262 842 222 809 222 764 C 222 713 272 672 332 672 C 349 672 366 675 382 680 V 292 Q 382 265 406 260 Z" fill="#007AFF"/>
+  </g>
+</svg>

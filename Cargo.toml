@@ -1,9 +1,15 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["crates/fixtures"]
+exclude = ["crates/fixtures", "vendor"]
 
 [workspace.package]
 edition = "2024"
 license = "GPL-3.0-or-later"
 version = "0.1.0"
+
+# ponytail: one-line patch of iced_wgpu so the glass can read the pixels behind
+# it (vendor/iced_wgpu/src/window/compositor.rs, "WoofMusic patch"). Drop it if
+# iced exposes surface usages; re-copy the crate on every iced upgrade.
+[patch.crates-io]
+iced_wgpu = { path = "vendor/iced_wgpu" }
