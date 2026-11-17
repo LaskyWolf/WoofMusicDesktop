@@ -1,0 +1,278 @@
+{
+ "responseContext": {
+  "visitorData": "Cgt4eHh4eHh4eHh4eA%3D%3D"
+ },
+ "contents": {
+  "singleColumnBrowseResultsRenderer": {
+   "tabs": [
+    {
+     "tabRenderer": {
+      "selected": true,
+      "content": {
+       "sectionListRenderer": {
+        "contents": [
+         {
+          "itemSectionRenderer": {
+           "contents": [
+            {
+             "musicShelfRenderer": {
+              "contents": [
+               {
+                "musicResponsiveListItemRenderer": {
+                 "thumbnail": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg?sqp=-oaymwEWCJADEJADIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3k",
+                      "width": 400,
+                      "height": 400
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "flexColumns": [
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Dayvan Cowboy",
+                       "navigationEndpoint": {
+                        "watchEndpoint": {
+                         "videoId": "dQw4w9WgXcQ",
+                         "playlistId": "LM"
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Boards of Canada",
+                       "navigationEndpoint": {
+                        "clickTrackingParams": "CAEQ",
+                        "browseEndpoint": {
+                         "browseId": "UCBoardsofCanada",
+                         "browseEndpointContextSupportedConfigs": {
+                          "browseEndpointContextMusicConfig": {
+                           "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                          }
+                         }
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "The Campfire Headphase",
+                       "navigationEndpoint": {
+                        "clickTrackingParams": "CAEQ",
+                        "browseEndpoint": {
+                         "browseId": "MPREb_TheCampfir",
+                         "browseEndpointContextSupportedConfigs": {
+                          "browseEndpointContextMusicConfig": {
+                           "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                          }
+                         }
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  }
+                 ],
+                 "fixedColumns": [
+                  {
+                   "musicResponsiveListItemFixedColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "5:00"
+                      }
+                     ]
+                    }
+                   }
+                  }
+                 ],
+                 "playlistItemData": {
+                  "videoId": "dQw4w9WgXcQ"
+                 },
+                 "menu": {
+                  "menuRenderer": {
+                   "items": [
+                    {
+                     "toggleMenuServiceItemRenderer": {
+                      "defaultIcon": {
+                       "iconType": "CHECK_CHECK"
+                      },
+                      "defaultServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "add-dQw4w9WgXcQ"
+                       }
+                      },
+                      "toggledServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "remove-dQw4w9WgXcQ"
+                       }
+                      }
+                     }
+                    }
+                   ]
+                  }
+                 }
+                }
+               },
+               {
+                "musicResponsiveListItemRenderer": {
+                 "thumbnail": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://i.ytimg.com/vi/kJQP7kiw5Fk/sddefault.jpg?sqp=-oaymwEWCJADEJADIAQqCghqEJQEGHgg6AJIWg&rs=AMzJL3k",
+                      "width": 400,
+                      "height": 400
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "flexColumns": [
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Says",
+                       "navigationEndpoint": {
+                        "watchEndpoint": {
+                         "videoId": "kJQP7kiw5Fk",
+                         "playlistId": "LM"
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Nils Frahm",
+                       "navigationEndpoint": {
+                        "clickTrackingParams": "CAEQ",
+                        "browseEndpoint": {
+                         "browseId": "UCNilsFrahm",
+                         "browseEndpointContextSupportedConfigs": {
+                          "browseEndpointContextMusicConfig": {
+                           "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                          }
+                         }
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Spaces",
+                       "navigationEndpoint": {
+                        "clickTrackingParams": "CAEQ",
+                        "browseEndpoint": {
+                         "browseId": "MPREb_Spaces",
+                         "browseEndpointContextSupportedConfigs": {
+                          "browseEndpointContextMusicConfig": {
+                           "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                          }
+                         }
+                        }
+                       }
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  }
+                 ],
+                 "fixedColumns": [
+                  {
+                   "musicResponsiveListItemFixedColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "8:46"
+                      }
+                     ]
+                    }
+                   }
+                  }
+                 ],
+                 "playlistItemData": {
+                  "videoId": "kJQP7kiw5Fk"
+                 },
+                 "menu": {
+                  "menuRenderer": {
+                   "items": [
+                    {
+                     "toggleMenuServiceItemRenderer": {
+                      "defaultIcon": {
+                       "iconType": "LIBRARY_ADD"
+                      },
+                      "defaultServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "add-kJQP7kiw5Fk"
+                       }
+                      },
+                      "toggledServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "remove-kJQP7kiw5Fk"
+                       }
+                      }
+                     }
+                    }
+                   ]
+                  }
+                 }
+                }
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

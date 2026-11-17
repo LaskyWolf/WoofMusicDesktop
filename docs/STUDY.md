@@ -94,6 +94,16 @@ Each spike answers one risk. Do them before any real screen.
 3. **Login**: Google login in a webview, harvest cookies, call `browse` with `FEmusic_liked_videos`. Pass = liked songs list matches the phone.
 4. **Window blur**: Mica on Windows 11 and `ext-background-effect-v1` on KDE. Pass = blurred wallpaper behind a transparent window, fallback on other systems.
 
+## 6. Switch to Rust
+
+The first build used Flutter 3.50 (branch `dev/milestones`). Its new Wayland renderer keeps the buffer scale it was created with, so a window that moves to a monitor with another scale is drawn at the wrong size ([flutter#196476](https://github.com/flutter/flutter/issues/196476), open, no fix). Native Wayland is a requirement, so the app is rewritten in Rust.
+
+- Logic: a Rust mirror of SwiftyTube and Trop, file by file, with the same rules as the Dart mirror. Swift enums, optionals and structs map to Rust ones.
+- Window: winit, which supports native Wayland and fractional scaling.
+- Glass: a wgpu shader that samples the content rendered behind the glass.
+- Player: libmpv (`libmpv2` crate), the same engine as the Flutter build.
+- The Dart code on `dev/milestones` is the reference for the port: it already maps every Swift file and has tests on real responses.
+
 ## Sources
 
 - [ext-background-effect-v1 protocol](https://wayland.app/protocols/ext-background-effect-v1)

@@ -1,0 +1,185 @@
+{
+ "responseContext": {
+  "visitorData": "Cgt4eHh4eHh4eHh4eA%3D%3D"
+ },
+ "contents": {
+  "singleColumnBrowseResultsRenderer": {
+   "tabs": [
+    {
+     "tabRenderer": {
+      "selected": true,
+      "content": {
+       "sectionListRenderer": {
+        "contents": [
+         {
+          "itemSectionRenderer": {
+           "contents": [
+            {
+             "gridRenderer": {
+              "items": [
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPREb_geogaddiTest01=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPREb_geogaddiTest01=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Geogaddi",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "MPREb_geogaddiTest01",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Album"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "Boards of Canada"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "2002"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "MPREb_geogaddiTest01",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                    }
+                   }
+                  }
+                 }
+                }
+               },
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPREb_allMelodyTest01=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPREb_allMelodyTest01=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "All Melody",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "MPREb_allMelodyTest01",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Album"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "Nils Frahm"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "2018"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "MPREb_allMelodyTest01",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_ALBUM"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              ],
+              "header": {
+               "gridHeaderRenderer": {
+                "title": {
+                 "runs": [
+                  {
+                   "text": "Library"
+                  }
+                 ]
+                }
+               }
+              }
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

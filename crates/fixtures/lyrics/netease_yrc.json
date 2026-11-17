@@ -1,0 +1,5 @@
+{"sgc":false,"code":200,
+ "lrc":{"version":3,"lyric":"[00:01.50]First sample line\n[00:04.00]Second sample line\n"},
+ "klyric":{"version":0,"lyric":""},
+ "tlyric":{"version":0,"lyric":""},
+ "yrc":{"version":2,"lyric":"{\"t\":0,\"c\":[{\"tx\":\"Lyrics\"}]}\n[1500,1500](1500,400,0)First (1900,500,0)sample (2400,600,0)line\n[4000,2000](4000,500,0)Second (4500,600,0)sample (5100,900,0)line\n"}}

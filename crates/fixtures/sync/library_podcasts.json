@@ -1,0 +1,167 @@
+{
+ "responseContext": {
+  "visitorData": "Cgt4eHh4eHh4eHh4eA%3D%3D"
+ },
+ "contents": {
+  "singleColumnBrowseResultsRenderer": {
+   "tabs": [
+    {
+     "tabRenderer": {
+      "selected": true,
+      "content": {
+       "sectionListRenderer": {
+        "contents": [
+         {
+          "itemSectionRenderer": {
+           "contents": [
+            {
+             "gridRenderer": {
+              "items": [
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLSE=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLSE=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Episodes for Later",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "VLSE",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Auto playlist"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "VLSE",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                    }
+                   }
+                  }
+                 }
+                }
+               },
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPSPPLexploderTest000001=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/MPSPPLexploderTest000001=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Song Exploder",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "MPSPPLexploderTest000001",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Podcast"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "Hrishikesh Hirway"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "MPSPPLexploderTest000001",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              ],
+              "header": {
+               "gridHeaderRenderer": {
+                "title": {
+                 "runs": [
+                  {
+                   "text": "Library"
+                  }
+                 ]
+                }
+               }
+              }
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

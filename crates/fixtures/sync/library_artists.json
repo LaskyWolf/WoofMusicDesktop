@@ -1,0 +1,240 @@
+{
+ "responseContext": {
+  "visitorData": "Cgt4eHh4eHh4eHh4eA%3D%3D"
+ },
+ "contents": {
+  "singleColumnBrowseResultsRenderer": {
+   "tabs": [
+    {
+     "tabRenderer": {
+      "selected": true,
+      "content": {
+       "sectionListRenderer": {
+        "contents": [
+         {
+          "itemSectionRenderer": {
+           "contents": [
+            {
+             "musicShelfRenderer": {
+              "contents": [
+               {
+                "musicResponsiveListItemRenderer": {
+                 "thumbnail": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/UCbocTestChannel000000001=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/UCbocTestChannel000000001=w226-h226-l90-rj",
+                      "width": 226,
+                      "height": 226
+                     }
+                    ]
+                   },
+                   "thumbnailCrop": "MUSIC_THUMBNAIL_CROP_CIRCLE"
+                  }
+                 },
+                 "flexColumns": [
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Boards of Canada"
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "512K subscribers"
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  }
+                 ],
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "UCbocTestChannel000000001",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                    }
+                   }
+                  }
+                 },
+                 "menu": {
+                  "menuRenderer": {
+                   "items": [
+                    {
+                     "toggleMenuServiceItemRenderer": {
+                      "defaultText": {
+                       "runs": [
+                        {
+                         "text": "Unsubscribe"
+                        }
+                       ]
+                      },
+                      "defaultIcon": {
+                       "iconType": "SUBSCRIBE_REMOVE"
+                      },
+                      "defaultServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "unsub-UCbocTestChannel000000001"
+                       }
+                      },
+                      "toggledServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "sub-UCbocTestChannel000000001"
+                       }
+                      }
+                     }
+                    }
+                   ]
+                  }
+                 }
+                }
+               },
+               {
+                "musicResponsiveListItemRenderer": {
+                 "thumbnail": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/UCnilsTestChannel00000001=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/UCnilsTestChannel00000001=w226-h226-l90-rj",
+                      "width": 226,
+                      "height": 226
+                     }
+                    ]
+                   },
+                   "thumbnailCrop": "MUSIC_THUMBNAIL_CROP_CIRCLE"
+                  }
+                 },
+                 "flexColumns": [
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Nils Frahm"
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  },
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "1.1M subscribers"
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  }
+                 ],
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "UCnilsTestChannel00000001",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                    }
+                   }
+                  }
+                 },
+                 "menu": {
+                  "menuRenderer": {
+                   "items": [
+                    {
+                     "toggleMenuServiceItemRenderer": {
+                      "defaultText": {
+                       "runs": [
+                        {
+                         "text": "Unsubscribe"
+                        }
+                       ]
+                      },
+                      "defaultIcon": {
+                       "iconType": "SUBSCRIBE_REMOVE"
+                      },
+                      "defaultServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "unsub-UCnilsTestChannel00000001"
+                       }
+                      },
+                      "toggledServiceEndpoint": {
+                       "feedbackEndpoint": {
+                        "feedbackToken": "sub-UCnilsTestChannel00000001"
+                       }
+                      }
+                     }
+                    }
+                   ]
+                  }
+                 }
+                }
+               },
+               {
+                "musicResponsiveListItemRenderer": {
+                 "flexColumns": [
+                  {
+                   "musicResponsiveListItemFlexColumnRenderer": {
+                    "text": {
+                     "runs": [
+                      {
+                       "text": "Row without endpoint"
+                      }
+                     ]
+                    },
+                    "displayPriority": "MUSIC_RESPONSIVE_LIST_ITEM_COLUMN_DISPLAY_PRIORITY_HIGH"
+                   }
+                  }
+                 ]
+                }
+               }
+              ],
+              "continuations": [
+               {
+                "nextContinuationData": {
+                 "continuation": "artists-page-2",
+                 "clickTrackingParams": "CAA"
+                }
+               }
+              ]
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

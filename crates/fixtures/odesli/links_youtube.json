@@ -1,0 +1,37 @@
+{
+  "entityUniqueId": "YOUTUBE_VIDEO::FGBhQbmPwH8",
+  "userCountry": "US",
+  "pageUrl": "https://song.link/y/FGBhQbmPwH8",
+  "entitiesByUniqueId": {
+    "YOUTUBE_VIDEO::FGBhQbmPwH8": {
+      "id": "FGBhQbmPwH8",
+      "type": "song",
+      "title": "One More Time",
+      "artistName": "Daft Punk",
+      "thumbnailUrl": "https://i.ytimg.com/vi/FGBhQbmPwH8/hqdefault.jpg",
+      "thumbnailWidth": 480,
+      "thumbnailHeight": 360,
+      "apiProvider": "youtube",
+      "platforms": ["youtube", "youtubeMusic"]
+    },
+    "SPOTIFY_SONG::0DiWol3AO6WpXZgp0goxAV": {
+      "id": "0DiWol3AO6WpXZgp0goxAV",
+      "type": "song",
+      "title": "One More Time",
+      "artistName": "Daft Punk",
+      "apiProvider": "spotify",
+      "platforms": ["spotify"]
+    }
+  },
+  "linksByPlatform": {
+    "youtubeMusic": {
+      "url": "https://music.youtube.com/watch?v=FGBhQbmPwH8",
+      "entityUniqueId": "YOUTUBE_VIDEO::FGBhQbmPwH8"
+    },
+    "spotify": {
+      "url": "https://open.spotify.com/track/0DiWol3AO6WpXZgp0goxAV",
+      "nativeAppUriDesktop": "spotify:track:0DiWol3AO6WpXZgp0goxAV",
+      "entityUniqueId": "SPOTIFY_SONG::0DiWol3AO6WpXZgp0goxAV"
+    }
+  }
+}

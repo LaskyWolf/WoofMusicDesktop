@@ -1,0 +1,245 @@
+{
+ "responseContext": {
+  "visitorData": "Cgt4eHh4eHh4eHh4eA%3D%3D"
+ },
+ "contents": {
+  "singleColumnBrowseResultsRenderer": {
+   "tabs": [
+    {
+     "tabRenderer": {
+      "selected": true,
+      "content": {
+       "sectionListRenderer": {
+        "contents": [
+         {
+          "itemSectionRenderer": {
+           "contents": [
+            {
+             "gridRenderer": {
+              "items": [
+               {
+                "musicTwoRowItemRenderer": {
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "New playlist"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "createPlaylistEndpoint": {}
+                 }
+                }
+               },
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLLM=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLLM=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Liked Music",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "VLLM",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Auto playlist"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "VLLM",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                    }
+                   }
+                  }
+                 }
+                }
+               },
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLPLfocusTestPlaylist000001=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLPLfocusTestPlaylist000001=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Late Night Focus",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "VLPLfocusTestPlaylist000001",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "You"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "48 songs"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "VLPLfocusTestPlaylist000001",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                    }
+                   }
+                  }
+                 }
+                }
+               },
+               {
+                "musicTwoRowItemRenderer": {
+                 "thumbnailRenderer": {
+                  "musicThumbnailRenderer": {
+                   "thumbnail": {
+                    "thumbnails": [
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLPLroadTestPlaylist0000001=w60-h60-l90-rj",
+                      "width": 60,
+                      "height": 60
+                     },
+                     {
+                      "url": "https://lh3.googleusercontent.com/VLPLroadTestPlaylist0000001=w544-h544-l90-rj",
+                      "width": 544,
+                      "height": 544
+                     }
+                    ]
+                   }
+                  }
+                 },
+                 "title": {
+                  "runs": [
+                   {
+                    "text": "Road Trip",
+                    "navigationEndpoint": {
+                     "clickTrackingParams": "CAEQ",
+                     "browseEndpoint": {
+                      "browseId": "VLPLroadTestPlaylist0000001",
+                      "browseEndpointContextSupportedConfigs": {
+                       "browseEndpointContextMusicConfig": {
+                        "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                       }
+                      }
+                     }
+                    }
+                   }
+                  ]
+                 },
+                 "subtitle": {
+                  "runs": [
+                   {
+                    "text": "Marco"
+                   },
+                   {
+                    "text": " • "
+                   },
+                   {
+                    "text": "112 songs"
+                   }
+                  ]
+                 },
+                 "navigationEndpoint": {
+                  "clickTrackingParams": "CAEQ",
+                  "browseEndpoint": {
+                   "browseId": "VLPLroadTestPlaylist0000001",
+                   "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": {
+                     "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              ],
+              "header": {
+               "gridHeaderRenderer": {
+                "title": {
+                 "runs": [
+                  {
+                   "text": "Library"
+                  }
+                 ]
+                }
+               }
+              }
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

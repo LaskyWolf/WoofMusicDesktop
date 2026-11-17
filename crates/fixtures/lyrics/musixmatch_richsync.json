@@ -1,0 +1,6 @@
+{"message":{"header":{"status_code":200},"body":{"macro_calls":{
+ "matcher.track.get":{"message":{"header":{"status_code":200},"body":{"track":{"track_id":1,"instrumental":0}}}},
+ "track.lyrics.get":{"message":{"header":{"status_code":200},"body":{"lyrics":{"restricted":0,"lyrics_body":"First sample line\nSecond sample line"}}}},
+ "track.richsync.get":{"message":{"header":{"status_code":200},"body":{"richsync":{"richsync_body":"[{\"ts\":1.5,\"te\":3.0,\"l\":[{\"c\":\"First\",\"o\":0},{\"c\":\" \",\"o\":0.4},{\"c\":\"sample\",\"o\":0.5},{\"c\":\" \",\"o\":0.9},{\"c\":\"line\",\"o\":1.0}],\"x\":\"First sample line\"},{\"ts\":4,\"te\":6,\"l\":[{\"c\":\"Second\",\"o\":0},{\"c\":\" \",\"o\":0.5},{\"c\":\"line\",\"o\":0.6}],\"x\":\"Second line\"}]"}}}},
+ "track.subtitles.get":{"message":{"header":{"status_code":200},"body":{"subtitle_list":[{"subtitle":{"subtitle_body":"[{\"text\":\"First sample line\",\"time\":{\"total\":1.5,\"minutes\":0,\"seconds\":1,\"hundredths\":50}}]"}}]}}}
+}}}}

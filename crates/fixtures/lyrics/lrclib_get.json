@@ -1,0 +1,3 @@
+{"id":1,"trackName":"Sample Song","artistName":"Sample Artist","albumName":"Sample Album","duration":200.0,"instrumental":false,
+ "plainLyrics":"First sample line\nSecond sample line\n\nThird sample line",
+ "syncedLyrics":"[00:01.50] First sample line\n[00:04.00] Second sample line\n[00:07.25] \n[00:09.00] Third sample line"}
