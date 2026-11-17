@@ -29,26 +29,36 @@ Rust translation of [SwiftyTube](https://github.com/686udjie/SwiftyTube), the Yo
 | `Task.sleep` | `tokio::time::sleep` |
 | `Codable` (`AuthState`) | `serde` derive, same JSON keys |
 | `Decodable` in `playerResponse` | `serde::de::DeserializeOwned` |
+| `Cipher/CipherWebView.swift` (hidden WKWebView) | `cipher/cipher_js_engine.rs`: QuickJS through `rquickjs`; `BROWSER_SHIM` stubs the DOM globals player.js reads while loading |
+| `PoToken/PoTokenGenerator.swift` (WKWebView + `po_token.html`) | `po_token_generator.rs` always fails: BotGuard rejects attestation outside a browser |
+| `actor PlayerConfigStore`, CipherWebView's `loadTask` | a `tokio::sync::Mutex` held for the whole call |
+| `Bundle.module` `player_configs.json` | `src/player_configs.json`, compiled in with `include_str!` |
+| `Documents/Player` (player.js cache) | `$XDG_CACHE_HOME` (or `~/.cache`) / `%LOCALAPPDATA%`, then `WoofMusic/Player` |
+| `async` closures in `StreamResolveProviders` | `Arc<dyn Fn(..) -> BoxFuture<_>>`; `StreamResolveProviders::live()` wires the cipher |
+| `any Error` rethrown by `StreamResolver` | `StreamError::InnerTube` / `StreamError::Cipher` |
+| PoToken `Task` started before the fallback loop | minted when the first token client is reached |
+| `Notification.Name.durationDidUpdate` | not ported yet (R4, when a screen listens) |
+| `removingPercentEncoding`, `.urlQueryAllowed` | `percent-encoding` crate |
+| `Data(base64Encoded:)` | `base64` crate |
 
 `SecureAuthStore` (in `secure_store.rs`) is not in Swift: it stores one JSON `AuthState` and implements `AuthStateProvider`, as the Dart translation did.
 
 ## Status
 
-Translated: `Core/`, `Networking/`, `Formatting/`, and from `Auth/`: `AccountInfo`, `AuthState`, `AuthStateProvider`, `CookieParser`, `SAPISIDAuth`, `SecureStore`, `SessionImporter`. `Streaming/PlayerRequestOptions` is here because `InnerTubeClient::player` takes it.
+Translated: `Core/`, `Networking/`, `Formatting/`, `Streaming/`, `Cipher/`, `PoToken/`, and from `Auth/`: `AccountInfo`, `AuthState`, `AuthStateProvider`, `CookieParser`, `SAPISIDAuth`, `SecureStore`, `SessionImporter`.
 
 Not yet, each in its own folder when its milestone starts:
 
 | Folder / file | Milestone |
 | --- | --- |
-| `Streaming/`, `Cipher/` (`rquickjs` in place of `CipherWebView.swift`), `PoToken/` | R3 |
-| `InnerTubeClient.fetchDuration` / `resolveDuration` (need `Streaming/`) | R3 |
 | `Sync/`, `InnerTubeClient.verifySession` (needs `Sync/BrowseLens`) | R5 |
 | `Auth/CookieHarvest`, `LoginWebviewHarvest`, `SessionTokenRefresher` (webview login) | R5 |
+| A working `PoTokenGenerator` (needs the R5 webview) | R5 |
 | `YouTube/` (main-YouTube parsers, comments) | not planned |
 
 ## Tests
 
-`cargo test -p swiftytube` runs offline against `crates/fixtures/` and a mock session. `cargo test -p swiftytube -- --ignored` also calls YouTube Music anonymously.
+`cargo test -p swiftytube` runs offline against `crates/fixtures/` and a mock session, including the QuickJS cipher on a small fake player.js. `cargo test -p swiftytube -- --ignored` also calls YouTube Music anonymously.
 
 ## Updating
 

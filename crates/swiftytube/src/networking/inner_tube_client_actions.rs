@@ -1,7 +1,6 @@
 // Account, library and queue endpoints. Parsing stays in apps.
 // Swift `extension InnerTubeClient` → a second `impl InnerTubeClient` block.
-// Not here yet: `fetchDuration` / `resolveDuration` (need Streaming, R3) and
-// `verifySession` (needs Sync's `BrowseLens`, R5).
+// Not here yet: `verifySession` (needs Sync's `BrowseLens`, R5).
 
 use std::collections::HashSet;
 
@@ -21,6 +20,8 @@ use crate::core::swiftytube_log::SwiftyTubeLog;
 use crate::core::youtube_client::YouTubeClient;
 use crate::core::youtube_locale::YouTubeLocale;
 use crate::core::youtube_service::YouTubeService;
+use crate::streaming::duration_cache::DurationCache;
+use crate::streaming::player_response::PlayerResponse;
 
 impl InnerTubeClient {
     // MARK: - Auth state
@@ -69,6 +70,23 @@ impl InnerTubeClient {
         Ok(())
     }
 
+    pub async fn fetch_duration(&self, video_id: &str) -> Result<i64, InnerTubeError> {
+        let response: PlayerResponse = self
+            .player_response(PlayerArgs {
+                video_id: video_id.to_string(),
+                client: Some(YouTubeClient::IOS),
+                ..PlayerArgs::default()
+            })
+            .await?;
+        let duration = response
+            .video_details
+            .and_then(|d| d.length_seconds)
+            .and_then(|s| s.parse().ok())
+            .ok_or(InnerTubeError::DecodingFailed)?;
+        DurationCache::set(video_id, duration);
+        Ok(duration)
+    }
+
     /// Resolves a channel avatar when a feed/search renderer omits it.
     /// Search lockups can contain the channel name but neither channel ID nor
     /// avatar; `/player` provides the ID and the channel header provides the
@@ -114,6 +132,24 @@ impl InnerTubeClient {
                 SwiftyTubeLog::debug(&format!(
                     "[AvatarResolve] failed videoId={video_id} error={error}"
                 ));
+                None
+            }
+        }
+    }
+
+    /// Cached duration, else fetch. None while another task fetches.
+    pub async fn resolve_duration(&self, video_id: &str) -> Option<i64> {
+        if let Some(cached) = DurationCache::get(video_id).filter(|d| *d > 0) {
+            return Some(cached);
+        }
+        if DurationCache::is_pending(video_id) {
+            return None;
+        }
+        DurationCache::mark_pending(video_id);
+        match self.fetch_duration(video_id).await {
+            Ok(duration) => Some(duration),
+            Err(_) => {
+                DurationCache::clear_pending(video_id);
                 None
             }
         }
