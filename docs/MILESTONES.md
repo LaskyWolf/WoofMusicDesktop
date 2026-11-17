@@ -43,7 +43,8 @@ Done when: 10 songs in a row play without a 403 error.
 ## R4: Browse
 
 - [x] Translate the Trop parsers: Home, Explore, Search, album, artist, playlist, podcast
-- [ ] Screens: sidebar, Home, Search, detail pages, player bar, now playing, with the R1 glass
+- [x] Sidebar, Home with real covers, player bar that plays a clicked song
+- [ ] Search, Explore, album/artist/playlist pages, queue, now playing
 
 Done when: every page opens from real data and starts playback.
 

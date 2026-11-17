@@ -17,8 +17,9 @@ use std::thread::JoinHandle;
 use libmpv2::events::Event;
 use libmpv2::{Mpv, mpv_end_file_reason};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum State {
+    #[default]
     Stopped,
     Playing,
     Paused,

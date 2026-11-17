@@ -12,6 +12,8 @@ pub const PRESSED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
 pub const CLOSE: Color = rgb(0xE5, 0x48, 0x4D);
 pub const CLOSE_PRESSED: Color = rgb(0xC4, 0x36, 0x3B);
 /// Dark tint over the glass, so white text on it keeps its contrast.
+/// Cover placeholder while the image downloads.
+pub const PLACEHOLDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
 pub const GLASS_TINT: Color = Color::from_rgba(0.08, 0.08, 0.09, 0.55);
 
 pub const INSET: f32 = 12.0;
