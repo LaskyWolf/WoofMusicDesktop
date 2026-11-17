@@ -78,7 +78,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         // with a colour split that grows with the bend, like a lens edge.
         let bend = curve * 22.0 * scale;
         let base = px + n * bend;
-        let blur = 3.0 * scale;
+        let blur = 7.0 * scale;
         col = vec3(
             frosted(base + n * bend * 0.06, blur).r,
             frosted(base, blur).g,

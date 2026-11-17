@@ -4,10 +4,11 @@
 mod glass;
 mod theme;
 mod title_bar;
+mod virtual_list;
 
 use iced::font::Weight;
 use iced::gradient::Linear;
-use iced::widget::{Space, column, container, row, scrollable, stack, svg, text};
+use iced::widget::{Space, button, column, container, row, scrollable, stack, svg, text};
 use iced::{
     Background, Border, Color, Element, Gradient, Length, Padding, Radians, Size, Subscription,
     Task, window,
@@ -42,6 +43,30 @@ pub fn main() -> iced::Result {
 #[derive(Default)]
 struct App {
     maximized: bool,
+    page: Page,
+    library: virtual_list::State,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Page {
+    #[default]
+    Home,
+    Explore,
+    Library,
+    Search,
+}
+
+impl Page {
+    const ALL: [Page; 4] = [Page::Home, Page::Explore, Page::Library, Page::Search];
+
+    fn label(self) -> &'static str {
+        match self {
+            Page::Home => "Home",
+            Page::Explore => "Explore",
+            Page::Library => "Library",
+            Page::Search => "Search",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +74,8 @@ enum Message {
     TitleBar(title_bar::Message),
     Resized,
     Maximized(bool),
+    Open(Page),
+    LibraryScrolled(scrollable::Viewport),
     Snapshot(window::Screenshot),
 }
 
@@ -69,7 +96,17 @@ impl App {
             }
             Err(_) => Task::none(),
         };
-        (Self::default(), snapshot)
+        let page = match std::env::var("WOOF_PAGE").as_deref() {
+            Ok("library") => Page::Library,
+            _ => Page::Home,
+        };
+        (
+            Self {
+                page,
+                ..Self::default()
+            },
+            snapshot,
+        )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -80,6 +117,14 @@ impl App {
                 .map(Message::Maximized),
             Message::Maximized(maximized) => {
                 self.maximized = maximized;
+                Task::none()
+            }
+            Message::Open(page) => {
+                self.page = page;
+                Task::none()
+            }
+            Message::LibraryScrolled(viewport) => {
+                self.library.update(viewport);
                 Task::none()
             }
             Message::Snapshot(shot) => {
@@ -99,8 +144,11 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         let mut layers = stack![
             wash(),
-            page(),
-            sidebar(),
+            match self.page {
+                Page::Library => library(&self.library),
+                _ => home(),
+            },
+            sidebar(self.page),
             player_bar(),
             top_strip(self.maximized),
         ]
@@ -130,8 +178,17 @@ fn wash<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// Scrolling content: sections of placeholder covers.
-fn page<'a>() -> Element<'a, Message> {
+/// Space around the scrolling content: below the title strip, left of the
+/// sidebar, above the player bar.
+const CONTENT_PADDING: Padding = Padding {
+    top: title_bar::HEIGHT + 8.0,
+    right: theme::CONTENT_RIGHT,
+    bottom: theme::PLAYER_HEIGHT + 2.0 * theme::INSET + 32.0,
+    left: theme::CONTENT_LEFT,
+};
+
+/// Home: sections of placeholder covers.
+fn home<'a>() -> Element<'a, Message> {
     let sections = [
         "Listen again",
         "Quick picks",
@@ -155,15 +212,61 @@ fn page<'a>() -> Element<'a, Message> {
         .into()
     })
     .collect::<Vec<Element<'a, Message>>>();
-    scrollable(column(sections).spacing(40).padding(Padding {
-        top: title_bar::HEIGHT + 8.0,
-        right: theme::CONTENT_RIGHT,
-        bottom: theme::PLAYER_HEIGHT + 2.0 * theme::INSET + 32.0,
-        left: theme::CONTENT_LEFT,
-    }))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    scrollable(column(sections).spacing(40).padding(CONTENT_PADDING))
+        .direction(theme::scrollbar())
+        .style(theme::scroll_style)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// Library demo: 5,000 song rows in a virtualized list.
+fn library(state: &virtual_list::State) -> Element<'_, Message> {
+    const ROW_HEIGHT: f32 = 56.0;
+    virtual_list::view(
+        state,
+        5000,
+        ROW_HEIGHT,
+        CONTENT_PADDING,
+        |i| song_row(i, ROW_HEIGHT),
+        Message::LibraryScrolled,
+    )
+}
+
+fn song_row<'a>(index: usize, height: f32) -> Element<'a, Message> {
+    let seconds = 150 + (index * 37) % 180;
+    let content = row![
+        cover(index, 40.0, 6.0),
+        column![
+            text(format!("Song {}", index + 1))
+                .size(14)
+                .font(theme::weight(Weight::Medium)),
+            text("Artist").size(13).color(theme::SECONDARY),
+        ]
+        .spacing(2)
+        .width(Length::Fill),
+        text(format!("{}:{:02}", seconds / 60, seconds % 60))
+            .size(13)
+            .color(theme::SECONDARY),
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Center);
+    button(content)
+        .padding([0, 10])
+        .height(height)
+        .width(Length::Fill)
+        .on_press(Message::Open(Page::Library))
+        .style(|_, status| button::Style {
+            background: match status {
+                button::Status::Hovered => Some(Background::Color(theme::HOVER)),
+                button::Status::Pressed => Some(Background::Color(theme::PRESSED)),
+                _ => None,
+            },
+            border: Border::default().rounded(10),
+            text_color: theme::TEXT,
+            ..button::Style::default()
+        })
+        .into()
 }
 
 fn cover_tile<'a>(index: usize) -> Element<'a, Message> {
@@ -211,10 +314,11 @@ fn glass_panel<'a>(
         .into()
 }
 
-fn sidebar<'a>() -> Element<'a, Message> {
-    let item = |label: &'a str, selected: bool| {
-        container(
-            text(label)
+fn sidebar<'a>(current: Page) -> Element<'a, Message> {
+    let item = |page: Page| {
+        let selected = page == current;
+        button(
+            text(page.label())
                 .size(15)
                 .font(theme::weight(Weight::Medium))
                 .color(if selected {
@@ -225,10 +329,18 @@ fn sidebar<'a>() -> Element<'a, Message> {
         )
         .padding([8, 12])
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            background: selected.then_some(Background::Color(theme::PRESSED)),
+        .on_press(Message::Open(page))
+        .style(move |_, status| button::Style {
+            background: if selected {
+                Some(Background::Color(theme::PRESSED))
+            } else if status == button::Status::Hovered {
+                Some(Background::Color(theme::HOVER))
+            } else {
+                None
+            },
             border: Border::default().rounded(10),
-            ..container::Style::default()
+            text_color: theme::TEXT,
+            ..button::Style::default()
         })
     };
     let brand = row![
@@ -248,11 +360,8 @@ fn sidebar<'a>() -> Element<'a, Message> {
                 .center_y(title_bar::HEIGHT - 8.0)
         )
         .map(Message::TitleBar),
-        item("Home", true),
-        item("Explore", false),
-        item("Library", false),
-        item("Search", false),
     ]
+    .extend(Page::ALL.map(item).map(Element::from))
     .spacing(2)
     .padding(10);
     container(glass_panel(

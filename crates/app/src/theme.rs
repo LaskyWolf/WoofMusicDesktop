@@ -1,7 +1,8 @@
 //! Colours and sizes, taken from the WoofMusic identity (same values as the Flutter build).
 
 use iced::font::{Family, Weight};
-use iced::{Color, Font};
+use iced::widget::scrollable;
+use iced::{Background, Border, Color, Font, Theme};
 
 pub const BACKGROUND: Color = Color::BLACK;
 pub const TEXT: Color = Color::WHITE;
@@ -11,7 +12,7 @@ pub const PRESSED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
 pub const CLOSE: Color = rgb(0xE5, 0x48, 0x4D);
 pub const CLOSE_PRESSED: Color = rgb(0xC4, 0x36, 0x3B);
 /// Dark tint over the glass, so white text on it keeps its contrast.
-pub const GLASS_TINT: Color = Color::from_rgba(0.08, 0.08, 0.09, 0.45);
+pub const GLASS_TINT: Color = Color::from_rgba(0.08, 0.08, 0.09, 0.55);
 
 pub const INSET: f32 = 12.0;
 pub const SIDEBAR_WIDTH: f32 = 232.0;
@@ -40,4 +41,35 @@ pub const PALETTES: [(Color, Color); 7] = [
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb8(r, g, b)
+}
+
+/// Thin overlay scrollbar, away from the window's resize edge.
+pub fn scrollbar() -> scrollable::Direction {
+    scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new()
+            .width(6)
+            .scroller_width(6)
+            .margin(8),
+    )
+}
+
+pub fn scroll_style(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
+    let alpha = match status {
+        scrollable::Status::Dragged { .. } => 0.55,
+        scrollable::Status::Hovered {
+            is_vertical_scrollbar_hovered: true,
+            ..
+        } => 0.40,
+        _ => 0.22,
+    };
+    let mut style = scrollable::default(theme, status);
+    style.vertical_rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: Background::Color(Color::from_rgba(1.0, 1.0, 1.0, alpha)),
+            border: Border::default().rounded(3),
+        },
+    };
+    style
 }
