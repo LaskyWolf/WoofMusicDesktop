@@ -73,6 +73,7 @@ Done when: every WoofMusic iOS feature in `PRODUCT.md` works on desktop.
 
 ## R8: Packages
 
+- [ ] libmpv on Windows: download an mpv-dev build in CI and make `mpv.lib` for MSVC (the Windows CI job fails to link until then)
 - [ ] AppImage for Linux, installer for Windows, built by CI on `v*` tags
 - [ ] README install steps
 

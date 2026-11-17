@@ -7,11 +7,18 @@ Status: rewrite in progress, nothing to install yet. See [docs/MILESTONES.md](do
 ## Build from source
 
 1. Install Rust (stable): <https://rustup.rs>
-2. Run:
+2. Install libmpv 0.35 or newer (the audio player):
+   - Arch: `sudo pacman -S mpv`
+   - Debian 12 / Ubuntu 24.04: `sudo apt install libmpv-dev`
+   - Fedora: `sudo dnf install mpv-libs-devel`
+3. Run:
 
 ```bash
-cargo test --workspace
+cargo run -p woofmusic --release   # the app
+cargo test --workspace             # the tests
 ```
+
+Windows builds are not set up yet (milestone R8).
 
 ## Layout
 
