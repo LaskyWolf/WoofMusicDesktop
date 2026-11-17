@@ -6,3 +6,4 @@ pub mod explore;
 pub mod home;
 pub mod networking;
 pub mod search;
+pub mod utilities;

@@ -6,8 +6,9 @@ version.workspace = true
 
 [dependencies]
 iced = { version = "0.14", features = ["wgpu", "tokio", "image", "svg", "advanced"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 png = "0.18"
 reqwest = "0.13.5"
 swiftytube = { path = "../swiftytube" }
 trop = { path = "../trop" }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["rt", "time"] }

@@ -46,7 +46,8 @@ Done when: 10 songs in a row play without a 403 error.
 - [x] Sidebar, Home with real covers, player bar that plays a clicked song
 - [x] Search, Explore with mood pages, album/artist/playlist pages, back button that restores the scroll position
 - [x] Queue: a click plays its list from that song; next, previous, auto-advance at the song's end
-- [ ] Podcast page, now playing view, queue panel
+- [x] Podcast page, Now Playing view tinted by the cover's colours, queue panel, seek slider
+- [x] Shortcuts: Space plays or pauses, Escape closes the queue or Now Playing, Alt+Left goes back
 
 Done when: every page opens from real data and starts playback.
 

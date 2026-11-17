@@ -16,11 +16,13 @@ use trop::audio::player_controller::player_controller::PlayerController;
 use trop::detail::album_detail_parser::AlbumDetailParser;
 use trop::detail::artist_detail_parser::ArtistDetailParser;
 use trop::detail::playlist_detail_parser::PlaylistDetailParser;
+use trop::detail::podcast_detail_parser::PodcastDetailParser;
 use trop::explore::explore_view_model::ExploreViewModel;
 use trop::home::home_view_model::HomeViewModel;
 use trop::networking::models::home_page::{ExploreSection, HomeSection};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
 use crate::{Detail, Route};
 
@@ -104,6 +106,10 @@ impl Services {
                     .map(Detail::playlist)
                     .map_err(|error| error.to_string())
             }
+            Route::Podcast(id) => PodcastDetailParser::load(client, &id)
+                .await
+                .map(Detail::podcast)
+                .map_err(|error| error.to_string()),
             Route::Mood(mood) => {
                 let sections = ExploreViewModel::load_mood_detail(client, &mood).await;
                 if sections.is_empty() {
@@ -118,6 +124,18 @@ impl Services {
         }
     }
 
+    /// The Now Playing cover, black borders cropped, and its two background colours.
+    pub async fn artwork(self: Arc<Self>, url: String) -> Option<Artwork> {
+        const PX: i64 = 1000;
+        let sized = ArtworkURLs::artwork(Some(&url), PX).unwrap_or(url);
+        let bytes = self.http.get(sized).send().await.ok()?.bytes().await.ok()?;
+        // Decoding a 1000 px JPEG takes a few ms: off the async workers.
+        tokio::task::spawn_blocking(move || Artwork::decode(&bytes))
+            .await
+            .ok()
+            .flatten()
+    }
+
     /// A playable stream URL: VISIONOS first, cipher clients after.
     pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<String, String> {
         let request = StreamResolveRequest::playback(&video_id, StreamResolveOptions::default());
@@ -130,5 +148,26 @@ impl Services {
         .await
         .map(|result| result.stream_url)
         .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Artwork {
+    pub image: image::Handle,
+    /// Primary and secondary colours of the cover.
+    pub colors: [Rgb; 2],
+}
+
+impl Artwork {
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        let cover = ::image::load_from_memory(bytes).ok()?.into_rgba8();
+        let (x, y, side, _) = colors::center_cropped_square(cover.width(), cover.height(), &cover);
+        let square = ::image::imageops::crop_imm(&cover, x, y, side, side).to_image();
+        let tiny =
+            ::image::imageops::resize(&square, 8, 8, ::image::imageops::FilterType::Triangle);
+        Some(Self {
+            colors: colors::extract_dominant_colors(&tiny),
+            image: image::Handle::from_rgba(side, side, square.into_raw()),
+        })
     }
 }

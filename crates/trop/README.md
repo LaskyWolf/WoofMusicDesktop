@@ -20,11 +20,12 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `@MainActor` view models with generation counters | structs with `&mut self` async methods; calls cannot interleave, so the counters are gone |
 | `InnerTubeClient.tropShared` | `Arc<InnerTubeClient>` passed to each view model |
 | `Task` cancellation of an older search | the caller drops the older future |
+| `UIImage` drawn into a `CGContext` | 8-bit RGBA byte slices; the caller decodes and scales the image |
 | In-memory caches (`ArtistDetailCache`, `MoodDetailCache`) | `static Mutex<HashMap>` with `Instant` timestamps |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers).
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`.
 
 Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5).
 

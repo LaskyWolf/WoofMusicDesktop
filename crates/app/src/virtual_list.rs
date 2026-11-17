@@ -29,8 +29,10 @@ impl State {
     }
 }
 
+/// `id` lets a scroll operation move the list (`iced::widget::operation::scroll_to`).
 pub fn view<'a, Message: 'a>(
     state: &State,
+    id: &'static str,
     len: usize,
     row_height: f32,
     padding: Padding,
@@ -54,6 +56,7 @@ pub fn view<'a, Message: 'a>(
             .width(Length::Fill)
             .padding(padding),
     )
+    .id(id)
     .direction(theme::scrollbar())
     .style(theme::scroll_style)
     .on_scroll(on_scroll)

@@ -108,7 +108,9 @@ pub fn open(item: &YTItem, songs: &Arc<Vec<SongItem>>) -> Option<Message> {
         YTItem::Album(album) => Some(Message::Navigate(Route::Album(album.browse_id.clone()))),
         YTItem::Artist(artist) => Some(Message::Navigate(Route::Artist(artist.browse_id.clone()))),
         YTItem::Playlist(playlist) => Some(Message::Navigate(Route::Playlist(playlist.id.clone()))),
-        YTItem::Podcast(_) => None,
+        YTItem::Podcast(podcast) => {
+            Some(Message::Navigate(Route::Podcast(podcast.browse_id.clone())))
+        }
     }
 }
 
@@ -168,16 +170,27 @@ pub fn song_cell<'a>(
     clickable(content, open(item, songs), 8.0)
 }
 
-/// Full-width track row of an album or playlist: number or cover, title,
-/// artists, length. `playing` highlights the current song.
+/// Height of a `track_row`.
+pub const TRACK_ROW: f32 = 52.0;
+
+/// Full-width track row of an album, playlist or the queue: number or cover,
+/// title, `subtitle` (usually the artists), length. `playing` highlights the
+/// current song. `text_width` shortens the text to fit a narrow column.
 pub fn track_row<'a>(
     covers: &'a Covers,
     songs: &Arc<Vec<SongItem>>,
     index: usize,
     show_cover: bool,
     playing: bool,
+    subtitle: String,
+    text_width: Option<f32>,
 ) -> Element<'a, Message> {
     let song = &songs[index];
+    // In a narrow column the text ends with an ellipsis instead of a cut glyph.
+    let (title, subtitle) = match text_width {
+        Some(width) => (fit(&song.title, width, 14.0), fit(&subtitle, width, 13.0)),
+        None => (song.title.clone(), subtitle),
+    };
     let lead: Element<'a, Message> = if show_cover {
         cover(covers, song.thumbnail_url.as_deref(), 40.0, 6.0)
     } else {
@@ -193,12 +206,12 @@ pub fn track_row<'a>(
     let content = row![
         lead,
         column![
-            text(song.title.clone())
+            text(title)
                 .size(14)
                 .font(theme::weight(Weight::Medium))
                 .color(title_color)
                 .wrapping(text::Wrapping::None),
-            text(artists(&song.artists))
+            text(subtitle)
                 .size(13)
                 .color(theme::SECONDARY)
                 .wrapping(text::Wrapping::None),
@@ -216,7 +229,7 @@ pub fn track_row<'a>(
     ]
     .spacing(14)
     .align_y(Alignment::Center)
-    .height(52);
+    .height(TRACK_ROW);
     clickable(
         container(content).padding([0, 8]),
         Some(Message::PlayQueue(songs.clone(), index)),
@@ -335,9 +348,15 @@ pub fn fit(text: &str, width: f32, size: f32) -> String {
     format!("{}…", kept.trim_end())
 }
 
+/// "3:51", or "1:57:00" from an hour on.
 pub fn clock(seconds: f64) -> String {
     let seconds = seconds.max(0.0) as u64;
-    format!("{}:{:02}", seconds / 60, seconds % 60)
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 pub fn centered<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {

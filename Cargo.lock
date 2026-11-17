@@ -5953,6 +5953,7 @@ name = "woofmusic"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "image",
  "png 0.18.1",
  "reqwest",
  "swiftytube",

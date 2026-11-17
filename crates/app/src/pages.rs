@@ -1,4 +1,4 @@
-//! The pages: Home, Explore, Search, album, artist, playlist, mood, Library.
+//! The pages: Home, Explore, Search, album, artist, playlist, podcast, mood, Library.
 
 use std::sync::Arc;
 
@@ -6,7 +6,9 @@ use iced::font::Weight;
 use iced::gradient::Linear;
 use iced::widget::{Space, button, column, container, row, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Gradient, Length, Radians};
-use trop::detail::detail_models::{AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo};
+use trop::detail::detail_models::{
+    AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
+};
 use trop::networking::models::home_page::{
     ExploreSection, ExploreSectionKind, HomeSection, MoodItem,
 };
@@ -258,6 +260,52 @@ pub fn artist<'a>(
     ui::scroll_page(page)
 }
 
+/// A podcast: header, description, then its episodes, newest first as YouTube sends them.
+pub fn podcast<'a>(
+    covers: &'a Covers,
+    podcast: &'a PodcastDetailInfo,
+    songs: &Arc<Vec<SongItem>>,
+    playing: Option<&str>,
+) -> Element<'a, Message> {
+    let mut page = vec![ui::header(
+        covers,
+        podcast.thumbnail_url.as_deref(),
+        false,
+        &podcast.title,
+        vec![
+            podcast.author.clone().unwrap_or_default(),
+            count(podcast.episodes.len() as i64, "episode"),
+        ],
+        (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+    )];
+    if let Some(about) = podcast
+        .description_text
+        .as_deref()
+        .filter(|d| !d.is_empty())
+    {
+        page.push(
+            container(text(about).size(14).color(theme::SECONDARY))
+                .max_width(720)
+                .into(),
+        );
+    }
+    // `songs` holds the episodes in the same order (`Detail::podcast`).
+    let rows = podcast.episodes.iter().enumerate().map(|(index, episode)| {
+        let subtitle = [
+            episode.publish_date.clone().unwrap_or_default(),
+            episode.views_text.clone().unwrap_or_default(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" • ");
+        let is_playing = playing == Some(episode.video_id.as_str());
+        ui::track_row(covers, songs, index, true, is_playing, subtitle, None)
+    });
+    page.push(column(rows).spacing(2).into());
+    ui::scroll_page(page)
+}
+
 /// The artist page's item shelves, as (title, items) slices of one list built
 /// by `artist_items`: albums, singles, playlists, related artists.
 fn shelves(items: &[YTItem]) -> Vec<(&'static str, &[YTItem])> {
@@ -309,7 +357,8 @@ fn tracks<'a>(
     // virtual_list once the header can scroll with it.
     column((0..songs.len()).map(|index| {
         let is_playing = playing == Some(songs[index].video_id.as_str());
-        ui::track_row(covers, songs, index, show_cover, is_playing)
+        let subtitle = ui::artists(&songs[index].artists);
+        ui::track_row(covers, songs, index, show_cover, is_playing, subtitle, None)
     }))
     .spacing(2)
     .into()
@@ -337,6 +386,7 @@ pub fn library(state: &virtual_list::State) -> Element<'_, Message> {
     const ROW_HEIGHT: f32 = 56.0;
     virtual_list::view(
         state,
+        "library",
         5000,
         ROW_HEIGHT,
         ui::CONTENT_PADDING,
