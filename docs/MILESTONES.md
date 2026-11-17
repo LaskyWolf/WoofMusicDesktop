@@ -17,9 +17,9 @@ Done when: CI is green on an empty workspace.
 Risk answered: does the Rust UI toolkit give native Wayland, its own title bar and real Liquid Glass?
 
 - [x] Choose the UI toolkit: iced 0.14
-- [ ] Window without system decorations; title bar drawn by the app, with drag, double-click to maximize, resize edges, minimize/maximize/close
+- [x] Window without system decorations; title bar drawn by the app, with drag, double-click to maximize, resize edges, minimize/maximize/close
 - [x] Glass shader in wgpu: refraction at the edges, bright rim, slight colour split, on content scrolling behind it (`crates/app/src/glass.rs`; needs the one-line iced_wgpu patch in `vendor/`)
-- [ ] Check native Wayland on KDE with two monitors at different scales (125% and 100%): moving the window keeps the full size and sharp text
+- [x] Check native Wayland on KDE with two monitors at different scales (125% and 100%): moving the window keeps the full size and sharp text
 - [ ] Check Windows 11
 
 Done when: the window works on KDE Wayland and Windows 11, and scrolling under the glass stays at 60 fps.
