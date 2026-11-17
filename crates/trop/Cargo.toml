@@ -7,9 +7,10 @@ version.workspace = true
 [dependencies]
 libmpv2 = { version = "7", default-features = false }
 log = "0.4.35"
-
-[dev-dependencies]
+regex = "1.13.1"
 reqwest = "0.13.5"
 serde_json = "1.0.154"
 swiftytube = { path = "../swiftytube" }
+
+[dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"] }

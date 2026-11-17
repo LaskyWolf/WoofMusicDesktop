@@ -1,0 +1,88 @@
+//! Port of the Dart `test/trop/search_test.dart`.
+
+mod common;
+
+use common::{expect_well_formed, fixture, fixture_bytes};
+use trop::networking::models::yt_item::YTItem;
+use trop::search::search_parser::{SearchParser, SearchSection};
+use trop::search::search_service::SearchService;
+
+const ORDER: [&str; 7] = [
+    "Top result",
+    "Songs",
+    "Albums",
+    "Artists",
+    "Playlists",
+    "Podcasts",
+    "Profiles",
+];
+
+fn sections() -> Vec<SearchSection> {
+    SearchParser::parse_search_results(&fixture("search_daft_punk"))
+}
+
+fn named<'a>(sections: &'a [SearchSection], title: &str) -> &'a SearchSection {
+    sections.iter().find(|s| s.title == title).unwrap()
+}
+
+#[test]
+fn sections_in_app_order_each_with_items() {
+    let sections = sections();
+    assert_eq!(sections[0].title, "Top result");
+    let known: Vec<usize> = sections
+        .iter()
+        .filter_map(|s| ORDER.iter().position(|t| *t == s.title))
+        .collect();
+    assert!(known.is_sorted());
+    assert!(
+        sections
+            .iter()
+            .all(|s| s.title != "Videos" && s.title != "Episodes")
+    );
+    for section in &sections {
+        assert!(!section.items.is_empty());
+        section.items.iter().for_each(expect_well_formed);
+    }
+}
+
+#[test]
+fn top_result_is_the_daft_punk_artist_with_its_audience_line() {
+    let sections = sections();
+    let top = &sections[0];
+    let YTItem::Artist(artist) = &top.items[0] else {
+        panic!("top result is not an artist: {:?}", top.items[0]);
+    };
+    assert_eq!(artist.name, "Daft Punk");
+    assert!(artist.browse_id.starts_with("UC"));
+    assert!(top.subtitle.as_deref().is_some_and(|s| !s.is_empty()));
+}
+
+#[test]
+fn songs_albums_artists_playlists_and_podcasts_are_detected() {
+    let sections = sections();
+    let songs = &named(&sections, "Songs").items;
+    assert!(songs.iter().all(|i| matches!(i, YTItem::Song(_))));
+    let YTItem::Song(first) = &songs[0] else {
+        unreachable!()
+    };
+    assert!(first.artists.iter().any(|a| a.name == "Daft Punk"));
+    assert!(
+        named(&sections, "Albums")
+            .items
+            .iter()
+            .all(|i| matches!(i, YTItem::Album(a) if !a.artists.is_empty() && a.year.is_some()))
+    );
+    let all =
+        |title: &str, check: fn(&YTItem) -> bool| named(&sections, title).items.iter().all(check);
+    assert!(all("Artists", |i| matches!(i, YTItem::Artist(_))));
+    assert!(all("Playlists", |i| matches!(i, YTItem::Playlist(_))));
+    assert!(all("Podcasts", |i| matches!(i, YTItem::Podcast(_))));
+}
+
+#[test]
+fn parse_suggestions_reads_the_text_suggestions() {
+    let suggestions = SearchService::parse_suggestions(&fixture_bytes("suggestions_daft_p"));
+    assert!(!suggestions.is_empty());
+    assert!(suggestions.iter().all(|s| s.starts_with("daft p")));
+    assert!(SearchService::parse_suggestions(b"not json").is_empty());
+}
