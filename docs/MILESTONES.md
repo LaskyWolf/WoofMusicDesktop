@@ -26,9 +26,9 @@ Done when: the window works on KDE Wayland and Windows 11, and scrolling under t
 
 ## R2: Talk to YouTube
 
-- [ ] Translate `SwiftyTube/Core/`, `Networking/`, `Formatting/` (client context, headers, `browse`, `search`, `next`, `player`, retries, `visitorData`)
-- [ ] Translate `SwiftyTube/Auth/` cookie parsing and SAPISID hash; store the cookie in the system keyring (`keyring`)
-- [ ] Tests on the fixtures, same cases as the Dart tests
+- [x] Translate `SwiftyTube/Core/`, `Networking/`, `Formatting/` (client context, headers, `browse`, `search`, `next`, `player`, retries, `visitorData`)
+- [x] Translate `SwiftyTube/Auth/` cookie parsing and SAPISID hash; store the cookie in the system keyring (`keyring`)
+- [x] Tests on the fixtures, same cases as the Dart tests
 
 Done when: `browse("FEmusic_home")` returns Home anonymously and with a cookie.
 
