@@ -34,9 +34,9 @@ Done when: `browse("FEmusic_home")` returns Home anonymously and with a cookie.
 
 ## R3: Play a song
 
-- [ ] Translate `SwiftyTube/Streaming/` (client fallback chain with VISIONOS, format selection)
-- [ ] Translate `SwiftyTube/Cipher/` with `rquickjs` in place of `CipherWebView.swift`
-- [ ] Play audio with libmpv (`libmpv2`)
+- [x] Translate `SwiftyTube/Streaming/` (client fallback chain with VISIONOS, format selection)
+- [x] Translate `SwiftyTube/Cipher/` with `rquickjs` in place of `CipherWebView.swift`
+- [x] Play audio with libmpv (`libmpv2`)
 
 Done when: 10 songs in a row play without a 403 error.
 
