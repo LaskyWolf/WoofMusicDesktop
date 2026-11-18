@@ -2384,6 +2384,9 @@ mod tests {
             window: WINDOW_SIZE,
             liked: HashSet::new(),
             notice: None,
+            defaults: PlayerDefaults::default(),
+            speed: PlaybackSpeed::default(),
+            sleep: SleepTimer::default(),
         }
     }
 
