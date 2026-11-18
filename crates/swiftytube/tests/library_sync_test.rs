@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use swiftytube::auth::auth_state::AuthState;
@@ -18,13 +18,15 @@ use swiftytube::sync::browse_lens::BrowseLens;
 use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::library_browse_parser::LibraryBrowseParser;
 use swiftytube::sync::library_sync_models::{
-    LibrarySyncOptions, SongMergeArgs, SongMetadata, SyncArtist, SyncPlaylist, SyncPlaylistEntry,
-    SyncSong,
+    LibrarySyncOptions, SongMergeArgs, SongMetadata, SyncArtist, SyncPlaylist, SyncSong,
 };
 use swiftytube::sync::library_sync_service::LibrarySyncService;
-use swiftytube::sync::library_sync_store::{JsonLibrarySyncStore, LibrarySyncStore};
+use swiftytube::sync::library_sync_store::LibrarySyncStore;
 use swiftytube::sync::mutation_service::MutationService;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
+
+mod support;
+use support::MemoryLibrarySyncStore;
 
 // MARK: - Fixtures
 
@@ -153,11 +155,11 @@ fn temp_path(name: &str) -> PathBuf {
     dir.join("library.json")
 }
 
-fn open_store(name: &str) -> Arc<JsonLibrarySyncStore> {
-    Arc::new(JsonLibrarySyncStore::open(temp_path(name)).unwrap())
+fn open_store() -> Arc<MemoryLibrarySyncStore> {
+    Arc::default()
 }
 
-fn liked_song_ids(store: &JsonLibrarySyncStore) -> Vec<String> {
+fn liked_song_ids(store: &MemoryLibrarySyncStore) -> Vec<String> {
     let mut liked: Vec<SyncSong> = store
         .snapshot()
         .songs
@@ -623,114 +625,12 @@ fn options_count_enabled_sections() {
     assert_eq!(some.enabled_count(), 3);
 }
 
-// MARK: - JSON store
-
-#[test]
-fn json_store_round_trips_every_table_through_the_file() {
-    let path = temp_path("round-trip");
-    let store = JsonLibrarySyncStore::open(&path).unwrap();
-    assert_eq!(store.snapshot(), Default::default());
-
-    let mut song = SyncSong::skeleton("v1", true, "add");
-    song.title = "Song".into();
-    store.save_song(&song).unwrap();
-    store
-        .save_artist(&SyncArtist {
-            id: "UC1".into(),
-            name: "Artist".into(),
-            thumbnail_url: None,
-            bookmarked_at: Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
-            is_podcast_channel: false,
-            channel_id: Some("UC1".into()),
-        })
-        .unwrap();
-    store
-        .insert_or_replace_playlist(&SyncPlaylist::merging(None, "PL1", Some("VLPL1"), "Mix", 1))
-        .unwrap();
-    let entry = SyncPlaylistEntry {
-        playlist_id: "PL1".into(),
-        song_id: "v1".into(),
-        position: 0,
-        set_video_id: Some("SET".into()),
-    };
-    store.insert_map_ignoring_conflicts(&entry).unwrap();
-    store
-        .insert_map_ignoring_conflicts(&SyncPlaylistEntry {
-            position: 9,
-            ..entry.clone()
-        })
-        .unwrap();
-    store
-        .insert_song_ignoring_conflicts(&SyncSong::skeleton("v1", false, ""))
-        .unwrap();
-
-    let reopened = JsonLibrarySyncStore::open(&path).unwrap();
-    assert_eq!(reopened.snapshot(), store.snapshot());
-    assert_eq!(reopened.fetch_song("v1").unwrap(), Some(song));
-    assert_eq!(reopened.fetch_map_entry("PL1", "v1").unwrap(), Some(entry));
-    assert_eq!(reopened.snapshot().playlist_maps.len(), 1);
-    assert_eq!(
-        reopened.fetch_artist("UC1").unwrap().unwrap().name,
-        "Artist"
-    );
-
-    std::fs::write(&path, b"not json").unwrap();
-    assert!(JsonLibrarySyncStore::open(&path).is_err());
-}
-
-#[test]
-fn json_store_sweeps_missing_artists_and_stale_likes() {
-    let store = open_store("sweep");
-    store
-        .save_artist(&SyncArtist {
-            id: "UCgone".into(),
-            name: "Gone".into(),
-            thumbnail_url: None,
-            bookmarked_at: Some(UNIX_EPOCH),
-            is_podcast_channel: false,
-            channel_id: None,
-        })
-        .unwrap();
-    let remote = store
-        .apply_artist_sync(&LibraryBrowseParser::parse_artists(&dict(fixture(
-            "library_artists",
-        ))))
-        .unwrap();
-    assert_eq!(remote.len(), 2);
-    assert_eq!(
-        store.fetch_artist("UCgone").unwrap().unwrap().bookmarked_at,
-        None
-    );
-    assert!(
-        store
-            .fetch_artist("UCbocTestChannel000000001")
-            .unwrap()
-            .unwrap()
-            .bookmarked_at
-            .is_some()
-    );
-
-    let mut old = SyncSong::skeleton("old", true, "");
-    old.modify_date = UNIX_EPOCH;
-    store.save_song(&old).unwrap();
-    store
-        .save_song(&SyncSong::skeleton("fresh", true, ""))
-        .unwrap();
-    let cutoff = SystemTime::now() - Duration::from_secs(60);
-    store
-        .unmark_stale_liked_songs(&HashSet::new(), cutoff)
-        .unwrap();
-    assert!(!store.fetch_song("old").unwrap().unwrap().liked);
-    assert!(store.fetch_song("fresh").unwrap().unwrap().liked);
-    assert_eq!(store.fetch_orphan_song_ids().unwrap(), Vec::<String>::new());
-}
-
 // MARK: - Services
 
 #[tokio::test]
 async fn disabled_sections_skip_network_but_still_refresh_likes() {
     let (client, sent) = fake_client(signed_in_library);
-    let store = open_store("gating");
+    let store = open_store();
     let service = LibrarySyncService::new(client, store.clone());
     let refreshed = AtomicBool::new(false);
     let none = LibrarySyncOptions {
@@ -752,7 +652,7 @@ async fn disabled_sections_skip_network_but_still_refresh_likes() {
 #[tokio::test]
 async fn playlist_detail_service_saves_the_liked_music_page() {
     let (client, _) = fake_client(signed_in_library);
-    let store = open_store("liked-music");
+    let store = open_store();
     let count = PlaylistDetailService::new(&client)
         .fetch_playlist(&*store, "LM", 100, false)
         .await
@@ -776,7 +676,7 @@ async fn playlist_detail_service_saves_the_liked_music_page() {
 #[tokio::test]
 async fn signed_in_sync_merges_every_section_into_the_store() {
     let (client, sent) = fake_client(signed_in_library);
-    let store = open_store("signed-in");
+    let store = open_store();
     let defaults = temp_path("signed-in-defaults").with_file_name("sync_defaults.json");
     let incremental = IncrementalSyncService::new(
         client.clone(),
@@ -852,7 +752,7 @@ async fn guest_session_writes_nothing() {
             signed_in_library(endpoint, body)
         }
     });
-    let store = open_store("guest");
+    let store = open_store();
     let incremental = IncrementalSyncService::new(
         client.clone(),
         LibrarySyncService::new(client, store.clone()),
@@ -869,10 +769,7 @@ async fn guest_session_writes_nothing() {
 
 // MARK: - MutationService request bodies
 
-fn mutation_service(
-    name: &str,
-    fail: Arc<AtomicBool>,
-) -> (MutationService, Arc<JsonLibrarySyncStore>, Sent) {
+fn mutation_service(fail: Arc<AtomicBool>) -> (MutationService, Arc<MemoryLibrarySyncStore>, Sent) {
     let (client, sent) = fake_client(move |endpoint, _| {
         if fail.load(Ordering::SeqCst) {
             return None;
@@ -882,13 +779,13 @@ fn mutation_service(
         }
         Some(json!({}))
     });
-    let store = open_store(name);
+    let store = open_store();
     (MutationService::new(client, store.clone()), store, sent)
 }
 
 #[tokio::test]
 async fn like_and_unlike() {
-    let (mutations, store, sent) = mutation_service("like", Arc::default());
+    let (mutations, store, sent) = mutation_service(Arc::default());
     mutations.like_song("abcdefghijk").await.unwrap();
     assert_eq!(
         last_sent(&sent),
@@ -912,14 +809,14 @@ async fn like_and_unlike() {
 
 #[tokio::test]
 async fn like_rolls_back_when_youtube_refuses() {
-    let (mutations, store, _) = mutation_service("like-refused", Arc::new(AtomicBool::new(true)));
+    let (mutations, store, _) = mutation_service(Arc::new(AtomicBool::new(true)));
     assert!(mutations.like_song("abcdefghijk").await.is_err());
     assert!(liked_song_ids(&store).is_empty());
 }
 
 #[tokio::test]
 async fn create_rename_add_to_and_remove_from_a_playlist() {
-    let (mutations, store, sent) = mutation_service("playlist", Arc::default());
+    let (mutations, store, sent) = mutation_service(Arc::default());
     let id = mutations.create_playlist("Mix", None).await.unwrap();
     assert_eq!(id, "PLnewTestPlaylist");
     assert_eq!(
@@ -962,7 +859,7 @@ async fn create_rename_add_to_and_remove_from_a_playlist() {
 
 #[tokio::test]
 async fn subscribe_and_unsubscribe_artist() {
-    let (mutations, _, sent) = mutation_service("subscribe", Arc::default());
+    let (mutations, _, sent) = mutation_service(Arc::default());
     mutations.subscribe_artist("UCx", "UCx").await.unwrap();
     assert_eq!(
         last_sent(&sent),
@@ -983,7 +880,7 @@ async fn subscribe_and_unsubscribe_artist() {
 
 #[tokio::test]
 async fn save_and_unsave_album_rates_its_playlist() {
-    let (mutations, store, sent) = mutation_service("album", Arc::default());
+    let (mutations, store, sent) = mutation_service(Arc::default());
     mutations
         .save_album("MPREb_x", "A", None, Some("OLAK5uy_x"), 0, 0)
         .await

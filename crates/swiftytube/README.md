@@ -41,8 +41,8 @@ Rust translation of [SwiftyTube](https://github.com/686udjie/SwiftyTube), the Yo
 | `removingPercentEncoding`, `.urlQueryAllowed` | `percent-encoding` crate |
 | `Data(base64Encoded:)` | `base64` crate |
 | `protocol LibrarySyncStore` (`async throws`) | sync trait `LibrarySyncStore` (`&self`, `Result<_, StoreError>`): it does no network I/O |
-| Trop's GRDB `LibrarySyncStore` | `JsonLibrarySyncStore`: one JSON file, `$XDG_DATA_HOME` (or `~/.local/share`) / `%APPDATA%`, then `WoofMusic/library.json` |
-| `UserDefaults` in `IncrementalSyncService` | a JSON object file, `WoofMusic/sync_defaults.json` in the same data directory |
+| Trop's GRDB `LibrarySyncStore` | Trop's rusqlite `TropLibraryStore` (`crates/trop`); the sync tests use `MemoryLibrarySyncStore` in `tests/support/` |
+| `UserDefaults` in `IncrementalSyncService` | a JSON object file; `default_defaults_path()` is `$XDG_DATA_HOME` (or `~/.local/share`) / `%APPDATA%`, then `WoofMusic/sync_defaults.json` |
 | `Date` in sync models | `std::time::SystemTime` |
 | `MutationError`, `NSError` and `any Error` thrown by sync services | `SyncError` |
 | `actor` sync services | `&self` methods; `MutationService`'s orphan-repair state behind a `Mutex` never held across `.await` |

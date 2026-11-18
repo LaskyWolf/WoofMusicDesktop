@@ -236,12 +236,15 @@ impl DatabaseService {
 
     /// GRDB `save`: updates the row with the same key, or inserts it.
     pub fn save<T: Record>(&self, record: &T) -> Result<()> {
-        let mut db = self.conn();
-        let tx = db.transaction()?;
-        if Self::update_in(&tx, record)? == 0 {
-            Self::insert_in(&tx, record, ConflictResolution::Abort)?;
+        self.write(|tx| Self::save_in(tx, record))
+    }
+
+    /// `save` inside a `write` block.
+    pub fn save_in<T: Record>(db: &Connection, record: &T) -> Result<()> {
+        if Self::update_in(db, record)? == 0 {
+            Self::insert_in(db, record, ConflictResolution::Abort)?;
         }
-        tx.commit()
+        Ok(())
     }
 
     pub fn insert_or_replace<T: Record>(&self, record: &T) -> Result<i64> {
@@ -259,12 +262,17 @@ impl DatabaseService {
     }
 
     pub fn fetch_one<T: Record>(&self, key: impl ToSql) -> Result<Option<T>> {
+        Self::fetch_one_in(&self.conn(), key)
+    }
+
+    /// `fetch_one` inside a `write` or `read` block.
+    pub fn fetch_one_in<T: Record>(db: &Connection, key: impl ToSql) -> Result<Option<T>> {
         let sql = format!(
             "SELECT * FROM \"{}\" WHERE \"{}\" = ?",
             T::TABLE,
             T::PRIMARY_KEY
         );
-        self.conn().query_row(&sql, [key], T::from_row).optional()
+        db.query_row(&sql, [key], T::from_row).optional()
     }
 
     pub fn fetch_all<T: Record>(&self) -> Result<Vec<T>> {

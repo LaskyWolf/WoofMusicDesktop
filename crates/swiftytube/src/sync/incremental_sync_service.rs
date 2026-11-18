@@ -7,7 +7,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::library_sync_models::LibrarySyncOptions;
 use super::library_sync_service::LibrarySyncService;
-use super::library_sync_store::JsonLibrarySyncStore;
 use crate::core::swiftytube_log::SwiftyTubeLog;
 use crate::networking::inner_tube_client::InnerTubeClient;
 use crate::networking::inner_tube_decode::JsonDict;
@@ -34,9 +33,18 @@ impl IncrementalSyncService {
         }
     }
 
-    /// Swift `UserDefaults.standard`: `sync_defaults.json` in the app data directory.
+    /// Swift `UserDefaults.standard`: `$XDG_DATA_HOME` (or `~/.local/share`) /
+    /// `%APPDATA%`, then `WoofMusic/sync_defaults.json`.
     pub fn default_defaults_path() -> Option<PathBuf> {
-        Some(JsonLibrarySyncStore::default_directory()?.join("sync_defaults.json"))
+        let env = |name| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        let base = env("XDG_DATA_HOME")
+            .or_else(|| env("APPDATA"))
+            .or_else(|| env("HOME").map(|home| home.join(".local").join("share")))?;
+        Some(base.join("WoofMusic").join("sync_defaults.json"))
     }
 
     /// Seconds since 1970, stored as a JSON number.
