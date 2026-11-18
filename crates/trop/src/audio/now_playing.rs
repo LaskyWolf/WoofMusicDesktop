@@ -200,6 +200,9 @@ pub struct PlayerDefaults {
     /// The speed last picked for a podcast episode.
     #[serde(rename = "playback.podcastSpeed")]
     pub podcast_speed: f64,
+    /// Skip the talking and skits of music videos with SponsorBlock.
+    #[serde(rename = "settings.skipNonMusic")]
+    pub skip_non_music: bool,
 }
 
 impl Default for PlayerDefaults {
@@ -211,6 +214,7 @@ impl Default for PlayerDefaults {
             equalizer_gains: vec![0.0; crate::audio::equalizer::FREQUENCIES.len()],
             equalizer_preset: "flat".into(),
             podcast_speed: 1.0,
+            skip_non_music: true,
         }
     }
 }

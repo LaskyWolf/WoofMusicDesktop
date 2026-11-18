@@ -153,6 +153,7 @@ impl State {
     pub fn view<'a>(
         &'a self,
         transitions: Option<&'a TransitionSettings>,
+        skip_non_music: bool,
     ) -> Element<'a, crate::Message> {
         let Some(status) = &self.status else {
             return ui::status(
@@ -169,7 +170,7 @@ impl State {
             page = page
                 .push(ui::section_title("Playback"))
                 .push(Space::new().height(14))
-                .push(playback(transitions))
+                .push(playback(transitions, skip_non_music))
                 .push(Space::new().height(28));
         }
         let mut page = page.extend([column![
@@ -338,7 +339,7 @@ fn odesli<'a>(status: &Status) -> Element<'a, crate::Message> {
 }
 
 /// Swift `PlayerSettingsView`'s transitions: AutoMix, Smart Crossfade and its length.
-fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
+fn playback(settings: &TransitionSettings, skip_non_music: bool) -> Element<'_, crate::Message> {
     let set = move |change: fn(&mut TransitionSettings, bool)| {
         let settings = settings.clone();
         move |on| {
@@ -355,6 +356,13 @@ fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
                 "Open",
                 crate::Message::Navigate(crate::Route::Equalizer),
             )),
+        ),
+        setting(
+            "Skip non-music parts",
+            caption(
+                "Jumps over the talking intros and skits of music videos, marked by SponsorBlock users.",
+            ),
+            Some(toggle(skip_non_music, crate::Message::SkipNonMusic)),
         ),
         setting(
             "AutoMix",

@@ -77,8 +77,9 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [ ] History page and play reports to YouTube Music history (`History/`, `YouTubeHistoryReport`)
 - [ ] Activity: new releases from followed artists (`Activity/`)
 - [x] Sleep timer, playback speed, equalizer (`SleepTimer`, `PlaybackSpeed`, `Equalizer`)
-- [ ] SponsorBlock, comments panel (`SponsorBlock`, `Comments/`)
-- [ ] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
+- [x] SponsorBlock skips the non-music parts of music videos (`SponsorBlock`)
+- [ ] Comments panel (`Comments/`)
+- [x] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
 - [ ] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
 - [ ] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
 - [ ] Profile and Recap (`Profile/`)

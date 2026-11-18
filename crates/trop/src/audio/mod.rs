@@ -8,4 +8,5 @@ pub mod now_playing;
 pub mod playback_speed;
 pub mod player_controller;
 pub mod sleep_timer;
+pub mod sponsor_block;
 pub mod track_analyzer;

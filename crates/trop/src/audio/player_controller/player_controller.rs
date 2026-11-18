@@ -325,8 +325,10 @@ impl PlayerController {
         lock(&self.shared).is_crossfading = on;
     }
 
-    /// Whether the playing file ended with an error since the last call: the
-    /// app retries it instead of moving on.
+    pub fn is_crossfading(&self) -> bool {
+        lock(&self.shared).is_crossfading
+    }
+
     pub fn volume(&self) -> f64 {
         lock(&self.shared).volume
     }
@@ -370,6 +372,8 @@ impl PlayerController {
         }
     }
 
+    /// Whether the playing file ended with an error since the last call: the
+    /// app retries it instead of moving on.
     pub fn take_failed(&self) -> bool {
         std::mem::take(&mut lock(&self.shared).failed)
     }

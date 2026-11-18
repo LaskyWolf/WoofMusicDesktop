@@ -23,6 +23,7 @@ use trop::audio::lyrics::lyrics_service::{LyricLine, LyricsService, LyricsSong};
 use trop::audio::lyrics::lyrics_view;
 use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
+use trop::audio::sponsor_block::{self, Segment};
 use trop::database::database_service::DatabaseService;
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::database::entities::song_entity::SongEntity;
@@ -445,6 +446,11 @@ impl Services {
     }
 
     /// The saved playlists "Add to Playlist" offers (Swift `fetchPlaylists(limit: 100)`).
+    /// The song's non-music parts; empty when SponsorBlock has none.
+    pub async fn sponsor_segments(self: Arc<Self>, video_id: String) -> Vec<Segment> {
+        sponsor_block::fetch_segments(&self.http, &video_id).await
+    }
+
     pub async fn playlists(self: Arc<Self>) -> Vec<PlaylistEntity> {
         blocking(move || self.db.fetch_playlists(Some(100)))
             .await

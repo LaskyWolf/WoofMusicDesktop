@@ -34,12 +34,14 @@ use trop::audio::now_playing::{PlayerDefaults, Queue};
 use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::player_controller::player_controller::State as PlayState;
 use trop::audio::sleep_timer::SleepTimer;
+use trop::audio::sponsor_block::{Segment, SponsorBlock};
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
 use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem};
 use trop::networking::models::yt_item::{SongItem, YTItem};
+use trop::playback::episode_playback_store::{self, EpisodePlaybackStore};
 use trop::search::search_parser::SearchSection;
 
 use pages::LibraryFilter;
@@ -312,6 +314,10 @@ struct App {
     defaults: PlayerDefaults,
     speed: PlaybackSpeed,
     sleep: SleepTimer,
+    /// The playing song's non-music parts.
+    sponsor: SponsorBlock,
+    /// Where podcast episodes and long videos stopped.
+    episodes: EpisodePlaybackStore,
 }
 
 pub enum Session {
@@ -442,6 +448,9 @@ pub enum Message {
     /// The volume slider was let go, or repeat changed: remember them.
     SaveDefaults,
     Equalizer(equalizer::Msg),
+    /// SponsorBlock's segments for a song.
+    Segments(String, Vec<Segment>),
+    SkipNonMusic(bool),
 }
 
 impl App {
@@ -504,6 +513,10 @@ impl App {
                 .unwrap_or_default(),
             speed: PlaybackSpeed::default(),
             sleep: SleepTimer::default(),
+            sponsor: SponsorBlock::default(),
+            episodes: EpisodePlaybackStore::default_path()
+                .map(|path| EpisodePlaybackStore::load(&path))
+                .unwrap_or_default(),
         };
         app.player.queue.is_repeat_on = app.defaults.repeat;
         app.speed.podcast_rate = app.defaults.podcast_speed;
@@ -689,6 +702,14 @@ impl App {
                 if let Some(player) = &self.services.player {
                     player.set_equalizer(self.defaults.equalizer());
                 }
+                self.save_defaults()
+            }
+            Message::Segments(video_id, segments) => {
+                self.sponsor.found(&video_id, segments);
+                Task::none()
+            }
+            Message::SkipNonMusic(on) => {
+                self.defaults.skip_non_music = on;
                 self.save_defaults()
             }
             Message::Maximized(maximized) => {
@@ -938,9 +959,7 @@ impl App {
                     (Ok(_), None) => Some("The audio player (libmpv) did not start.".to_owned()),
                     (Ok(url), Some(player)) => {
                         if let Some(song) = self.player.queue.song() {
-                            let is_episode = song.music_video_type.as_deref()
-                                == Some("MUSIC_VIDEO_TYPE_PODCAST_EPISODE");
-                            player.set_speed(self.speed.select(&song.video_id, is_episode));
+                            player.set_speed(self.speed.select(&song.video_id, is_episode(song)));
                         }
                         player
                             .play(&url, video_id.as_deref(), self.player.resume_at.take())
@@ -1075,6 +1094,8 @@ impl App {
                 let banked = self.plays.tick(now);
                 let saved = self.save_plays(banked);
                 dev_seek_end(&self.services, &self.player);
+                self.skip_non_music();
+                let episode = self.save_episode();
                 let slept = if self.sleep.due(now) {
                     self.fall_asleep()
                 } else {
@@ -1091,11 +1112,12 @@ impl App {
                     let after = if failed {
                         self.recover()
                     } else {
-                        self.song_ended()
+                        let played = self.mark_played();
+                        Task::batch([played, self.song_ended()])
                     };
-                    Task::batch([saved, transition, after, slept])
+                    Task::batch([saved, transition, episode, after, slept])
                 } else {
-                    Task::batch([saved, transition, slept])
+                    Task::batch([saved, transition, episode, slept])
                 }
             }
             Message::Settings(message) => self.settings.update(message),
@@ -1397,6 +1419,75 @@ impl App {
         Task::batch([finished, self.notify(message)])
     }
 
+    /// Jumps over a non-music part the song just reached (Swift `SponsorBlock`).
+    fn skip_non_music(&mut self) {
+        if !self.defaults.skip_non_music
+            || self.player.state != PlayState::Playing
+            || self.player.seeking.is_some()
+        {
+            return;
+        }
+        let Some(player) = &self.services.player else {
+            return;
+        };
+        if player.is_crossfading() {
+            return;
+        }
+        if let Some(end) = self.sponsor.skip_to(self.player.position) {
+            log::info!("Skipping a non-music part to {end:.1} s");
+            player.seek(end);
+        }
+    }
+
+    /// Remembers where a playing episode or long video is (Swift
+    /// `EpisodePlaybackStore.savePosition`).
+    fn save_episode(&mut self) -> Task<Message> {
+        let Some(song) = self.player.song() else {
+            return Task::none();
+        };
+        let long = self.player.duration >= 600.0 || is_episode(song);
+        if self.player.state != PlayState::Playing
+            || !long
+            || !self.episodes.save_position(
+                &song.video_id,
+                self.player.position,
+                self.player.duration,
+                episode_playback_store::now_seconds(),
+            )
+        {
+            return Task::none();
+        }
+        self.write_episodes()
+    }
+
+    /// The song played to its end: next time it starts from the top.
+    fn mark_played(&mut self) -> Task<Message> {
+        match self.player.song() {
+            Some(song) if self.episodes.clear(&song.video_id.clone()) => self.write_episodes(),
+            _ => Task::none(),
+        }
+    }
+
+    fn write_episodes(&mut self) -> Task<Message> {
+        let bytes = self.episodes.encoded();
+        Task::future(async move {
+            let Some(path) = EpisodePlaybackStore::default_path() else {
+                return;
+            };
+            let saved = tokio::task::spawn_blocking(move || {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, bytes)
+            })
+            .await;
+            if let Ok(Err(error)) = saved {
+                log::warn!("Could not save the episode positions: {error}");
+            }
+        })
+        .discard()
+    }
+
     fn save_defaults(&mut self) -> Task<Message> {
         self.defaults.repeat = self.player.queue.is_repeat_on;
         self.defaults.podcast_speed = self.speed.podcast_rate;
@@ -1457,6 +1548,11 @@ impl App {
             return Task::none();
         };
         let video_id = song.video_id.clone();
+        // An episode picks up where it stopped (Swift `playEpisode`).
+        self.player.resume_at = self
+            .episodes
+            .position(&video_id)
+            .and_then(|saved| saved.resume_at());
         if let Some(transitions) = &mut self.transitions {
             transitions.reset("a song was loaded");
         }
@@ -1495,11 +1591,21 @@ impl App {
             }
             _ => Task::none(),
         };
+        let segments = if self.defaults.skip_non_music && self.sponsor.track(&video_id) {
+            let id = video_id.clone();
+            Task::perform(
+                self.services.clone().sponsor_segments(video_id.clone()),
+                move |segments| Message::Segments(id.clone(), segments),
+            )
+        } else {
+            Task::none()
+        };
         Task::batch([
             self.fetch_covers(cover),
             artwork,
             saved,
             self.fetch_lyrics(),
+            segments,
         ])
     }
 
@@ -1714,9 +1820,10 @@ impl App {
                 ),
             },
             Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
-            Route::Settings => self
-                .settings
-                .view(self.transitions.as_ref().map(|t| &t.settings)),
+            Route::Settings => self.settings.view(
+                self.transitions.as_ref().map(|t| &t.settings),
+                self.defaults.skip_non_music,
+            ),
             Route::Equalizer => equalizer::view(&self.defaults),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
@@ -1851,20 +1958,22 @@ impl App {
         .spacing(10)
         .align_y(Alignment::Center);
         let position = player.seeking.unwrap_or(player.position);
-        let time = |seconds: f64| {
+        // "1:35:37" needs more room than "3:51".
+        let time_width = if player.duration >= 3600.0 { 52 } else { 36 };
+        let time = move |seconds: f64| {
             text(ui::clock(seconds))
                 .size(12)
                 .color(theme::SECONDARY)
-                .width(36)
+                .width(time_width)
         };
         let seek: Element<'_, Message> = if player.duration > 0.0 {
             row![
-                time(position),
+                time(position).align_x(Alignment::End),
                 slider(0.0..=player.duration, position, Message::Seeking)
                     .on_release(Message::Seek)
                     .step(0.5)
                     .style(seek_style),
-                time(player.duration).align_x(Alignment::End),
+                time(player.duration),
             ]
             .spacing(8)
             .align_y(Alignment::Center)
@@ -1922,11 +2031,14 @@ impl App {
                 .spacing(4)
                 .align_y(Alignment::Center)
                 .width(Length::FillPortion(1)),
-            // Transport takes its own width, so the seek slider gets the rest
-            // of a narrow window; equal sides keep it centred.
-            transport,
+            // The seek bar sits under the transport, so the buttons on the
+            // right never squeeze it out; equal thirds keep it centred.
+            column![transport, seek]
+                .spacing(2)
+                .align_x(Alignment::Center)
+                .width(Length::FillPortion(1)),
             row![
-                seek,
+                Space::new().width(Length::Fill),
                 row![download, lyrics, queue, link, more].spacing(4),
                 volume
             ]
@@ -2324,4 +2436,9 @@ mod icons {
     pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.4 4.5 7 4.5c2.1 0 3.6 1.1 5 3 1.4-1.9 2.9-3 5-3 3.6 0 5.6 3.5 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" fill="#fff"/></svg>"##;
     pub const TROPHY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 3h10v2h3.2a.8.8 0 0 1 .8.8V8a4 4 0 0 1-4.3 4A5 5 0 0 1 13 14.9V18h3a1 1 0 0 1 1 1v2H7v-2a1 1 0 0 1 1-1h3v-3.1A5 5 0 0 1 7.3 12 4 4 0 0 1 3 8V5.8a.8.8 0 0 1 .8-.8H7zm0 4H5v1a2 2 0 0 0 2 2zm10 0v3a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>"##;
     pub const BACK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+}
+
+/// Swift `isPodcastEpisode`: its speed and position are kept apart from songs.
+fn is_episode(song: &SongItem) -> bool {
+    song.music_video_type.as_deref() == Some("MUSIC_VIDEO_TYPE_PODCAST_EPISODE")
 }
