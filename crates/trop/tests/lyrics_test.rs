@@ -294,6 +294,18 @@ fn stored_text_falls_back_to_plain_lines_and_round_trips() {
     assert_eq!(LyricsParsing::plain_text(&synced), "First\nSecond");
 }
 
+#[test]
+fn untimed_line_in_saved_lrc_keeps_its_place() {
+    let raw = "[ar:Sample Artist]\n[00:03.00]three\n[00:01.00]one\nadded line\n[00:02.00]two";
+    let lines = LyricsParsing::parse_stored_text(raw);
+    assert_eq!(texts(&lines), ["one", "added line", "two", "three"]);
+    assert_eq!(lines[1].start_time, None);
+    assert_eq!(
+        LyricsParsing::serialize_lines(&lines),
+        "[00:01.00]one\nadded line\n[00:02.00]two\n[00:03.00]three"
+    );
+}
+
 // Providers, over a mock session.
 
 #[tokio::test]
