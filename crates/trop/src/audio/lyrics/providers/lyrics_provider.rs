@@ -50,6 +50,9 @@ static TAG: LazyLock<Regex> =
 /// Enhanced LRC word tag: `<mm:ss.xx>`.
 static WORD_TAG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<(\d+):(\d{1,2})(?:\.(\d{1,3}))?>").unwrap());
+/// LRC `[offset:±ms]` header.
+static OFFSET_TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\[offset:\s*([+-]?\d+)\s*\]").unwrap());
 /// Netease klyric / yrc and Kugou KRC line start `[startMs,durationMs]`.
 static KLYRIC_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[(\d+),\d+\]").unwrap());
 /// Netease klyric word tag `(x,durationMs)`.
@@ -132,6 +135,21 @@ impl LyricsParsing {
                         LyricLine::with_words(plain.clone(), Some(time), words.clone())
                     }
                 });
+            }
+        }
+        // `[offset:+500]` in ms: a positive offset shows the lyrics earlier.
+        let offset = split_lines(raw)
+            .find_map(|line| OFFSET_TAG.captures(line.trim()))
+            .and_then(|tag| tag[1].parse::<f64>().ok())
+            .map_or(0.0, |ms| ms / 1000.0);
+        if offset != 0.0 {
+            let shift = |t: f64| (t - offset).max(0.0);
+            for line in &mut lines {
+                line.start_time = line.start_time.map(shift);
+                for word in line.words.iter_mut().flatten() {
+                    word.start_time = shift(word.start_time);
+                    word.end_time = word.end_time.map(shift);
+                }
             }
         }
         lines.sort_by(|a, b| {

@@ -262,12 +262,16 @@ fn out_of_order_lrc_lines_are_sorted_by_time() {
 }
 
 #[test]
-fn lrc_metadata_tags_are_skipped_and_offset_is_not_applied() {
+fn lrc_metadata_tags_are_skipped_and_offset_shows_lyrics_earlier() {
     let lines = LyricsParsing::parse_lrc(
-        "[ar:Sample Artist]\n[ti:Sample Song]\n[offset:+500]\n[00:10.00]Line",
+        "[ar:Sample Artist]\n[ti:Sample Song]\n[offset:+500]\n[00:00.20]Intro\n[00:10.00]<00:10.00>Line",
     );
-    assert_eq!(texts(&lines), ["Line"]);
-    assert_eq!(lines[0].start_time, Some(10.0));
+    assert_eq!(texts(&lines), ["Intro", "Line"]);
+    assert_eq!(lines[0].start_time, Some(0.0));
+    assert_eq!(lines[1].start_time, Some(9.5));
+    assert_eq!(lines[1].words.as_ref().unwrap()[0].start_time, 9.5);
+    let later = LyricsParsing::parse_lrc("[offset:-250]\n[00:10.00]Line");
+    assert_eq!(later[0].start_time, Some(10.25));
 }
 
 #[test]
