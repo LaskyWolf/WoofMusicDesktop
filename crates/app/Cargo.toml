@@ -20,3 +20,4 @@ playwire = "2.0.0"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 discord-rich-presence = "1.1.0"
+dirs = "7"

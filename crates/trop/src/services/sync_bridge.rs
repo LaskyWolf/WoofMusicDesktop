@@ -23,6 +23,8 @@ pub struct SyncBridge {
     pub incremental: IncrementalSyncService,
     /// Held while a sync runs.
     running: Mutex<()>,
+    /// Swift reads the sections to sync from `SettingsStore`; all on by default.
+    options: std::sync::Mutex<LibrarySyncOptions>,
 }
 
 impl SyncBridge {
@@ -41,6 +43,7 @@ impl SyncBridge {
             client,
             store,
             running: Mutex::new(()),
+            options: std::sync::Mutex::new(LibrarySyncOptions::default()),
         }
     }
 
@@ -49,10 +52,13 @@ impl SyncBridge {
         PlaylistDetailService::new(&self.client)
     }
 
-    /// Every section on: Swift reads these flags from `SettingsStore`, whose
-    /// defaults are all true, and the desktop app has no sync settings yet.
-    pub fn options() -> LibrarySyncOptions {
-        LibrarySyncOptions::default()
+    pub fn options(&self) -> LibrarySyncOptions {
+        *self.options.lock().unwrap()
+    }
+
+    /// The sections later syncs cover.
+    pub fn set_options(&self, options: LibrarySyncOptions) {
+        *self.options.lock().unwrap() = options;
     }
 
     // Swift also skips both syncs while the account changes and refreshes
@@ -60,13 +66,13 @@ impl SyncBridge {
     pub async fn check_and_sync_if_stale(&self) {
         self.share(
             self.incremental
-                .check_and_sync_if_stale(Self::options(), async {}),
+                .check_and_sync_if_stale(self.options(), async {}),
         )
         .await;
     }
 
     pub async fn force_full_sync(&self) {
-        self.share(self.incremental.force_full_sync(Self::options(), async {}))
+        self.share(self.incremental.force_full_sync(self.options(), async {}))
             .await;
     }
 

@@ -4,6 +4,7 @@ mod downloads;
 mod glass;
 mod integrations;
 mod login;
+mod lyrics;
 mod media_controls;
 mod now_playing;
 mod pages;
@@ -285,6 +286,8 @@ struct App {
     cookie_header: String,
     downloads: downloads::Downloads,
     settings: settings::State,
+    /// The lyrics options, karaoke greeting and share card.
+    lyrics_extras: lyrics::State,
 }
 
 pub enum Session {
@@ -389,6 +392,8 @@ pub enum Message {
     Download(downloads::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
+    /// The lyrics options menu, karaoke and the share card.
+    Lyrics(lyrics::Message),
     /// A Playback setting changed: transitions use it from the next song.
     Transitions(TransitionSettings),
 }
@@ -396,8 +401,9 @@ pub enum Message {
 impl App {
     fn new() -> (Self, Task<Message>) {
         let services = Services::new();
+        let settings = settings::State::new(&services);
         let mut stack = vec![Entry {
-            route: Route::Home,
+            route: settings.start_route(),
             offset: 0.0,
         }];
         match dev_route() {
@@ -442,7 +448,8 @@ impl App {
             sign_in_error: None,
             cookie_header: String::new(),
             downloads: downloads::Downloads::default(),
-            settings: settings::State::default(),
+            lyrics_extras: lyrics::State::new(&services),
+            settings,
         };
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -864,7 +871,30 @@ impl App {
                     Task::batch([saved, transition])
                 }
             }
-            Message::Settings(message) => self.settings.update(message),
+            Message::Settings(message) => self.settings.update(message, &self.services),
+            Message::Lyrics(message) => {
+                let lyrics = match &self.lyrics {
+                    Some((id, Load::Loaded(lyrics)))
+                        if self.player.song().is_some_and(|song| song.video_id == *id) =>
+                    {
+                        Some(&**lyrics)
+                    }
+                    _ => None,
+                };
+                let cx = lyrics::Context {
+                    services: &self.services,
+                    song: self.player.song(),
+                    lyrics,
+                    artwork: self
+                        .artwork
+                        .as_ref()
+                        .filter(|(id, _)| self.player.song().is_some_and(|s| s.video_id == *id))
+                        .map(|(_, artwork)| artwork),
+                    time: self.player.position,
+                    prefs: &self.settings.prefs,
+                };
+                self.lyrics_extras.update(message, cx)
+            }
             Message::Transitions(settings) => {
                 let Some(transitions) = &mut self.transitions else {
                     return Task::none();
@@ -1166,6 +1196,7 @@ impl App {
                     .map(|_| Message::Download(downloads::Msg::Tick)),
             );
         }
+        subscriptions.push(self.lyrics_extras.subscription(self.showing_lyrics()));
         Subscription::batch(subscriptions)
     }
 
@@ -1186,7 +1217,10 @@ impl App {
         let now_playing = self.player.song().filter(|_| self.now_playing);
         let (backdrop, page) = match now_playing {
             Some(song) => (
-                now_playing::background(self.current_artwork()),
+                now_playing::background(
+                    self.current_artwork(),
+                    self.settings.prefs.player_background_style,
+                ),
                 now_playing::view(
                     &self.covers,
                     self.current_artwork(),
@@ -1195,8 +1229,12 @@ impl App {
                     self.lyrics
                         .as_ref()
                         .filter(|(id, _)| self.lyrics_open && *id == song.video_id)
-                        .map(|(_, lyrics)| {
-                            (lyrics, self.player.seeking.unwrap_or(self.player.position))
+                        .map(|(_, lyrics)| now_playing::LyricsPane {
+                            lyrics,
+                            time: self.player.seeking.unwrap_or(self.player.position),
+                            prefs: &self.settings.prefs,
+                            extras: &self.lyrics_extras,
+                            video_id: &song.video_id,
                         }),
                 ),
             ),
@@ -1225,6 +1263,9 @@ impl App {
             ))
             .width(Length::Fill)
             .height(Length::Fill);
+        if let Some(composer) = self.lyrics_extras.overlay() {
+            layers = layers.push(composer);
+        }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
         }
@@ -1251,9 +1292,11 @@ impl App {
                 ),
             },
             Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
-            Route::Settings => self
-                .settings
-                .view(self.transitions.as_ref().map(|t| &t.settings)),
+            Route::Settings => self.settings.view(
+                self.transitions.as_ref().map(|t| &t.settings),
+                &self.services,
+                &self.session,
+            ),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
