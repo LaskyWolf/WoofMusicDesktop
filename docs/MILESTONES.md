@@ -56,7 +56,7 @@ Done when: every page opens from real data and starts playback.
 - [x] Translate the Trop database (SQLite, migrations v1–v11) with `rusqlite`
 - [x] Google sign-in in a webview (`wry`) that harvests the cookies; cookie paste as fallback
 - [x] Translate `SwiftyTube/Sync/` and the Trop library services: likes, playlists, albums, artists
-- [ ] Record plays (play time, history) so My Top 100 fills
+- [x] Record plays (play time, history) so My Top 100 fills
 - [x] Library screens
 
 Done when: the library matches WoofMusic on the iPhone with the same account.

@@ -30,6 +30,7 @@ use trop::networking::models::home_page::{ExploreSection, HomeSection};
 use trop::networking::models::yt_item::{
     AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTArtist, YTItem,
 };
+use trop::playback::playback_state_service::{PlayRecord, save};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::services::sync_bridge::SyncBridge;
@@ -189,6 +190,13 @@ impl Services {
     /// already running is shared, not started twice.
     pub async fn sync_library(self: Arc<Self>) {
         self.sync.check_and_sync_if_stale().await;
+    }
+
+    pub async fn save_plays(self: Arc<Self>, song: Option<SongItem>, records: Vec<PlayRecord>) {
+        let db = self.db.clone();
+        if let Some(Err(error)) = blocking(move || save(&db, song.as_ref(), &records)).await {
+            eprintln!("Could not save play time: {error}");
+        }
     }
 
     // MARK: - Session

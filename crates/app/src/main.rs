@@ -12,7 +12,7 @@ mod virtual_list;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::font::Weight;
 use iced::widget::operation::{focus, scroll_to};
@@ -32,6 +32,7 @@ use trop::search::search_parser::SearchSection;
 use pages::LibraryFilter;
 use services::{Artwork, Library, Services};
 use swiftytube::auth::account_info::AccountInfo;
+use trop::playback::playback_state_service::{PlayRecord, PlaybackStateService};
 
 pub(crate) const APP_ID: &str = "com.laskywolf.woofmusic";
 
@@ -255,6 +256,8 @@ struct App {
     queue_list: virtual_list::State,
     /// The current song's large cover and colours, with its video id.
     artwork: Option<(String, Artwork)>,
+    /// Counts how long each song plays, for My Top 100 and history.
+    plays: PlaybackStateService,
     session: Session,
     /// Why the last sign-in did not finish, under the sign-in button.
     sign_in_error: Option<&'static str>,
@@ -385,6 +388,7 @@ impl App {
             queue_open: std::env::var("WOOF_QUEUE").is_ok(),
             queue_list: virtual_list::State::default(),
             artwork: None,
+            plays: PlaybackStateService::default(),
             // Dev aid: WOOF_SIGNED_IN=1 shows the signed-in pages without a session.
             session: if std::env::var("WOOF_SIGNED_IN").is_ok() {
                 Session::SignedIn(None)
@@ -743,14 +747,19 @@ impl App {
             Message::Tick => {
                 let was = self.player.state;
                 self.read_player();
+                let now = Instant::now();
+                self.plays
+                    .set_playing(self.player.state == PlayState::Playing, now);
+                let banked = self.plays.tick(now);
+                let saved = self.save_plays(banked);
                 // A song that played to its end: on to the next one.
                 if was == PlayState::Playing
                     && self.player.state == PlayState::Stopped
                     && !self.player.starting
                 {
-                    self.next()
+                    Task::batch([saved, self.next()])
                 } else {
-                    Task::none()
+                    saved
                 }
             }
             Message::Snapshot(shot) => {
@@ -811,6 +820,22 @@ impl App {
         }
     }
 
+    /// Saves play time and history off the UI thread.
+    fn save_plays(&self, records: Vec<PlayRecord>) -> Task<Message> {
+        let Some(PlayRecord::PlayTime { video_id, .. } | PlayRecord::Playback { video_id, .. }) =
+            records.first()
+        else {
+            return Task::none();
+        };
+        let song = self
+            .player
+            .queue
+            .iter()
+            .find(|song| song.video_id == *video_id)
+            .cloned();
+        Task::future(self.services.clone().save_plays(song, records)).discard()
+    }
+
     /// Swift `SyncBridge.checkAndSyncIfStale`, at sign-in and when Library opens.
     fn sync(&mut self) -> Task<Message> {
         if self.syncing {
@@ -841,6 +866,9 @@ impl App {
         };
         let video_id = song.video_id.clone();
         let cover = song.thumbnail_url.clone();
+        let finished = self.plays.stop_tracking(Instant::now());
+        self.plays.start_tracking(&video_id);
+        let saved = self.save_plays(finished);
         self.player.request += 1;
         let request = self.player.request;
         self.player.starting = true;
@@ -863,6 +891,7 @@ impl App {
             }),
             self.fetch_covers(cover),
             artwork,
+            saved,
         ])
     }
 
