@@ -15,6 +15,7 @@ use trop::networking::models::home_page::{
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
+use crate::playlist_edit;
 use crate::services::Library;
 use crate::ui::{self, Covers};
 use crate::{Load, Message, Route, theme};
@@ -196,6 +197,8 @@ pub fn playlist<'a>(
     playlist: &'a PlaylistDetailInfo,
     songs: &Arc<Vec<SongItem>>,
     playing: Option<&str>,
+    edit: &'a playlist_edit::State,
+    in_library: bool,
 ) -> Element<'a, Message> {
     let line = [
         playlist.author_name.clone().unwrap_or_default(),
@@ -219,7 +222,12 @@ pub fn playlist<'a>(
         vec![line, description],
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
     )];
-    page.push(tracks(covers, songs, true, playing));
+    page.push(playlist_edit::actions(covers, edit, playlist, in_library));
+    page.push(if edit.editing(&playlist.playlist_id) {
+        playlist_edit::edit_tracks(covers, edit, playlist, songs, playing)
+    } else {
+        tracks(covers, songs, true, playing)
+    });
     ui::scroll_page(page)
 }
 
@@ -475,6 +483,7 @@ pub fn library<'a>(
     library: &'a Library,
     filter: Option<LibraryFilter>,
     syncing: bool,
+    edit: &'a playlist_edit::State,
 ) -> Element<'a, Message> {
     let chips = row(LibraryFilter::ALL.map(|(chip, label)| {
         let selected = filter == Some(chip);
@@ -497,7 +506,9 @@ pub fn library<'a>(
             })
             .into()
     }))
-    .spacing(8);
+    .spacing(8)
+    .push(Space::new().width(Length::Fill))
+    .push(playlist_edit::new_playlist(edit));
     let shortcuts = row![
         shortcut(
             covers,

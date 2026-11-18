@@ -97,6 +97,12 @@ fn playlist_rows_from_the_page_walk_header_and_author() {
             .iter()
             .all(|s| set_video_ids.contains_key(&s.video_id))
     );
+    // Per row, in song order, for the desktop's remove and move.
+    assert_eq!(playlist.set_video_ids.len(), playlist.songs.len());
+    assert_eq!(
+        playlist.set_video_ids[0].as_ref(),
+        set_video_ids.get(&playlist.songs[0].video_id)
+    );
     assert_eq!(PlaylistDetailService::request_browse_id("PLx"), "VLPLx");
     assert_eq!(PlaylistDetailService::request_browse_id("VLPLx"), "VLPLx");
 }

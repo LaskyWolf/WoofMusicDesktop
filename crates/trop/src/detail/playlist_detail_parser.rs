@@ -222,6 +222,10 @@ impl PlaylistDetailParser {
             };
             song.added_by = PlaylistContributor::from(renderer, owner_avatar_url);
             info.songs.push(song);
+            info.set_video_ids.push(
+                InnerTubeDecode::string(&["playlistItemData", "playlistSetVideoId"], renderer)
+                    .map(str::to_string),
+            );
         }
 
         // Use actual song data for total duration (more precise than header)

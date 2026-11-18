@@ -71,7 +71,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [ ] Everyday controls: volume (`PlayerVolumeSlider`), shuffle and repeat (`PlaybackQueue`), like button (`LikeStore`, `LikeFlavor`)
 - [ ] Song menu: play next, add to queue, add to playlist, go to album or artist, share, start radio (`SongActionsMenu`, `RadioOptions`)
 - [ ] Queue editing: reorder, remove (`QueueView`)
-- [ ] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
+- [x] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
 - [ ] History page and play reports to YouTube Music history (`History/`, `YouTubeHistoryReport`)
 - [ ] Activity: new releases from followed artists (`Activity/`)
 - [ ] Sleep timer, playback speed, equalizer (`SleepTimer`, `PlaybackSpeed`, `Equalizer`)

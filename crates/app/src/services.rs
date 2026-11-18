@@ -51,7 +51,7 @@ pub struct Services {
     /// The synced library; in memory when the file cannot open.
     pub db: Arc<DatabaseService>,
     pub downloads: DownloadManager,
-    sync: SyncBridge,
+    pub(crate) sync: SyncBridge,
     lyrics: Arc<LyricsService>,
     providers: StreamResolveProviders,
     http: reqwest::Client,
@@ -638,7 +638,7 @@ fn songs_label(count: i64) -> String {
 }
 
 /// A library song as a queue entry. The database keeps names, not ids.
-fn song_item(song: &SongEntity) -> SongItem {
+pub(crate) fn song_item(song: &SongEntity) -> SongItem {
     SongItem {
         video_id: song.id.clone(),
         title: song.title.clone(),

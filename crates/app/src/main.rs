@@ -7,6 +7,7 @@ mod login;
 mod media_controls;
 mod now_playing;
 mod pages;
+mod playlist_edit;
 mod services;
 mod settings;
 mod theme;
@@ -285,6 +286,7 @@ struct App {
     cookie_header: String,
     downloads: downloads::Downloads,
     settings: settings::State,
+    playlist_edit: playlist_edit::State,
 }
 
 pub enum Session {
@@ -387,6 +389,8 @@ pub enum Message {
     SessionReady(bool),
     Account(Result<AccountInfo, String>),
     Download(downloads::Msg),
+    /// Creating, renaming, deleting and editing playlists.
+    PlaylistEdit(playlist_edit::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
     /// A Playback setting changed: transitions use it from the next song.
@@ -443,6 +447,7 @@ impl App {
             cookie_header: String::new(),
             downloads: downloads::Downloads::default(),
             settings: settings::State::default(),
+            playlist_edit: playlist_edit::State::default(),
         };
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -577,6 +582,7 @@ impl App {
                 Task::batch([load_home(&self.services), self.enter(), account, sync])
             }
             Message::Download(message) => self.update_download(message),
+            Message::PlaylistEdit(message) => self.update_playlist_edit(message),
             Message::Account(result) => {
                 if !matches!(self.session, Session::SignedIn(_)) {
                     return Task::none();
@@ -1238,9 +1244,13 @@ impl App {
             Route::Home => pages::home(covers, &self.home, playing),
             Route::Library => match &self.session {
                 Session::SignedIn(_) => match &self.library {
-                    Some(Load::Loaded(library)) => {
-                        pages::library(covers, library, self.library_filter, self.syncing)
-                    }
+                    Some(Load::Loaded(library)) => pages::library(
+                        covers,
+                        library,
+                        self.library_filter,
+                        self.syncing,
+                        &self.playlist_edit,
+                    ),
                     Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                     _ => ui::status(None, Message::Retry),
                 },
@@ -1268,7 +1278,16 @@ impl App {
                         shelves,
                     } => pages::artist(covers, info, songs, shelves, playing),
                     Detail::Playlist { info, songs } => {
-                        pages::playlist(covers, info, songs, playing)
+                        let in_library = matches!(&self.library, Some(Load::Loaded(library))
+                            if library.playlists.iter().any(|(item, _)| item.id() == info.playlist_id));
+                        pages::playlist(
+                            covers,
+                            info,
+                            songs,
+                            playing,
+                            &self.playlist_edit,
+                            in_library,
+                        )
                     }
                     Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
                     Detail::Mood(sections) => pages::explore(covers, sections, playing),
