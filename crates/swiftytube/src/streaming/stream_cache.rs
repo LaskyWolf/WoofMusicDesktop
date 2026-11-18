@@ -12,6 +12,9 @@ pub struct StreamCache {
 }
 
 impl StreamCache {
+    /// TTL when the response reports no usable expiry.
+    const DEFAULT_TTL_SECONDS: i64 = 5 * 60;
+
     pub fn shared() -> &'static StreamCache {
         static SHARED: LazyLock<StreamCache> = LazyLock::new(StreamCache::default);
         &SHARED
@@ -41,9 +44,13 @@ impl StreamCache {
         let ttl = if reported > 60 {
             (reported - 60).max(60)
         } else {
-            5 * 60
+            Self::DEFAULT_TTL_SECONDS
         };
-        let expires_at = Instant::now() + Duration::from_secs(ttl as u64);
+        let now = Instant::now();
+        // An absurd `expiresInSeconds` would overflow `Instant`; use the default TTL instead.
+        let expires_at = now
+            .checked_add(Duration::from_secs(ttl as u64))
+            .unwrap_or(now + Duration::from_secs(Self::DEFAULT_TTL_SECONDS as u64));
         self.cache()
             .insert(video_id.to_string(), (result, expires_at));
         SwiftyTubeLog::debug(&format!("Cached videoId={video_id} expires in {ttl}s"));
