@@ -1,0 +1,22 @@
+{
+  "result": {
+    "songs": [
+      {
+        "id": 1111,
+        "name": "Sample Song (Live)",
+        "artists": [{ "id": 1, "name": "Someone Else" }],
+        "album": { "id": 10, "name": "Live Tapes" },
+        "duration": 300000
+      },
+      {
+        "id": 2222,
+        "name": "Sample Song",
+        "artists": [{ "id": 2, "name": "Sample Artist" }],
+        "album": { "id": 20, "name": "Sample Album" },
+        "duration": 200500
+      }
+    ],
+    "songCount": 2
+  },
+  "code": 200
+}

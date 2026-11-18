@@ -1,0 +1,11 @@
+{
+  "status": 1,
+  "errcode": 0,
+  "data": {
+    "total": 2,
+    "info": [
+      { "hash": "LIVEHASH", "songname": "Sample Song (Live)", "singername": "Sample Artist", "duration": 400 },
+      { "hash": "8D3E1A2B4C5D6E7F8091A2B3C4D5E6F7", "songname": "Sample Song", "singername": "Sample Artist", "duration": 200 }
+    ]
+  }
+}

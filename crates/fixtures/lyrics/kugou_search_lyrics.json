@@ -1,0 +1,8 @@
+{
+  "status": 200,
+  "info": "OK",
+  "proposal": "123456789",
+  "candidates": [
+    { "id": "123456789", "accesskey": "FIXTUREACCESSKEY", "song": "Sample Song", "singer": "Sample Artist", "duration": 200000, "score": 60 }
+  ]
+}
