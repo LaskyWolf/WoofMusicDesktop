@@ -475,7 +475,9 @@ impl SongItem {
         }
     }
 
-    fn from_two_row_item(
+    /// Song from a renderer whose `subtitle.runs` hold the kind word, artists,
+    /// album and stats: two-row items and the search top result card.
+    pub(crate) fn from_two_row_item(
         renderer: &JsonDict,
         video_id: String,
         duration: i64,
