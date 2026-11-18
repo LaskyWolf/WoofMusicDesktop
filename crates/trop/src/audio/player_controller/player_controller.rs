@@ -38,6 +38,9 @@ struct Shared {
     current_video_id: Option<String>,
     pending_video_id: Option<String>,
     desired_playing: bool,
+    /// The playing file ended with an error (Swift `stopped(isEof: false)`),
+    /// until `take_failed`.
+    failed: bool,
     /// While true, the outgoing song's end finishes the crossfade instead of
     /// stopping playback.
     is_crossfading: bool,
@@ -128,6 +131,7 @@ impl PlayerController {
             current_video_id: None,
             pending_video_id: None,
             desired_playing: false,
+            failed: false,
             is_crossfading: false,
             events: DeckEvents::default(),
             has_bass_filter: true,
@@ -176,9 +180,16 @@ impl PlayerController {
 
     // MARK: - Playback
 
-    pub fn play(&self, url: &str, video_id: Option<&str>) -> Result<(), libmpv2::Error> {
+    /// Plays `url` from `start` seconds (Swift `resumeOnLoad`), or from the beginning.
+    pub fn play(
+        &self,
+        url: &str,
+        video_id: Option<&str>,
+        start: Option<f64>,
+    ) -> Result<(), libmpv2::Error> {
         let desired_playing = {
             let mut shared = lock(&self.shared);
+            shared.failed = false;
             // ponytail: Swift keeps a paused player paused here when the user
             // turned on Persistent Play/Pause (R6 settings); always plays for now.
             shared.desired_playing = true;
@@ -192,6 +203,7 @@ impl PlayerController {
         // A cancelled crossfade can leave the deck faded or sped up.
         mpv.set_property("volume", 100.0)?;
         mpv.set_property("speed", 1.0)?;
+        mpv.set_property("start", start.map_or("none".to_string(), fmt))?;
         self.apply_filters(&deck, None, None);
         if let Err(error) = mpv.command("loadfile", &[url, "replace"]) {
             log::error!("mpv_command loadfile failed result={error}");
@@ -302,6 +314,12 @@ impl PlayerController {
     /// Swift `isCrossfading`.
     pub fn set_crossfading(&self, on: bool) {
         lock(&self.shared).is_crossfading = on;
+    }
+
+    /// Whether the playing file ended with an error since the last call: the
+    /// app retries it instead of moving on.
+    pub fn take_failed(&self) -> bool {
+        std::mem::take(&mut lock(&self.shared).failed)
     }
 
     /// The deck events since the last call.
@@ -483,6 +501,7 @@ impl PlayerController {
         log::debug!("TRANSITION END_FILE reason={reason} isEof={is_eof} isError={is_error}");
         if is_error {
             shared.current_video_id = None;
+            shared.failed = true;
             shared.play_state = State::Stopped;
         } else if is_eof && shared.is_crossfading {
             // The outgoing song ran out before the mix swapped decks.

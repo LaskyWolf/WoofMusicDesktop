@@ -26,6 +26,7 @@ use iced::{
     Alignment, Background, Border, Color, Element, Length, Padding, Size, Subscription, Task,
     keyboard, window,
 };
+use swiftytube::streaming::stream_cache::StreamCache;
 use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
 use trop::audio::player_controller::player_controller::State as PlayState;
 use trop::detail::detail_models::{
@@ -309,6 +310,11 @@ struct Player {
     request: u64,
     /// Where the seek slider is while it is dragged; `Tick` leaves it alone.
     seeking: Option<f64>,
+    /// Where a retried song picks up after a load error (Swift `resumeOnLoad`).
+    resume_at: Option<f64>,
+    /// When each song last failed to load, so a second failure stops instead
+    /// of retrying forever.
+    failures: HashMap<String, Instant>,
 }
 
 impl Player {
@@ -722,7 +728,7 @@ impl App {
                     (Err(error), _) => Some(error),
                     (Ok(_), None) => Some("The audio player (libmpv) did not start.".to_owned()),
                     (Ok(url), Some(player)) => player
-                        .play(&url, video_id.as_deref())
+                        .play(&url, video_id.as_deref(), self.player.resume_at.take())
                         .err()
                         .map(|error| error.to_string()),
                 };
@@ -845,12 +851,15 @@ impl App {
                 let saved = self.save_plays(banked);
                 dev_seek_end(&self.services, &self.player);
                 let transition = self.tick_transitions();
-                // A song that played to its end: on to the next one.
+                // A song that played to its end: on to the next one. A song
+                // whose stream failed: retry it (Swift `recoverFromPlaybackFailure`).
                 if was == PlayState::Playing
                     && self.player.state == PlayState::Stopped
                     && !self.player.starting
                 {
-                    Task::batch([saved, transition, self.next()])
+                    let failed = (self.services.player.as_ref()).is_some_and(|p| p.take_failed());
+                    let after = if failed { self.recover() } else { self.next() };
+                    Task::batch([saved, transition, after])
                 } else {
                     Task::batch([saved, transition])
                 }
@@ -967,6 +976,32 @@ impl App {
         }
         self.player.index += 1;
         self.start()
+    }
+
+    /// The current song's stream failed mid-play: drop its cached link and
+    /// load a fresh one from where it stopped. A second failure within 30 s
+    /// stops instead, like Swift.
+    fn recover(&mut self) -> Task<Message> {
+        let Some(song) = self.player.song() else {
+            return Task::none();
+        };
+        let video_id = song.video_id.clone();
+        let now = Instant::now();
+        let recent = self.player.failures.get(&video_id);
+        if recent.is_some_and(|at| now.duration_since(*at) < Duration::from_secs(30)) {
+            self.player.error = Some("This song keeps failing to play.".to_owned());
+            return Task::none();
+        }
+        log::info!("Playback failed for {video_id}; retrying with a fresh stream");
+        self.player.failures.insert(video_id.clone(), now);
+        self.player.resume_at = Some(self.player.position);
+        StreamCache::shared().remove(&video_id);
+        self.player.request += 1;
+        let request = self.player.request;
+        self.player.starting = true;
+        Task::perform(self.services.clone().resolve(video_id), move |result| {
+            Message::Resolved(request, result)
+        })
     }
 
     /// Resolves the stream of the queue's current song; `Resolved` plays it.

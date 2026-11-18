@@ -129,7 +129,7 @@ async fn smoke_resolve_range_check_and_play() {
     let played = tokio::task::spawn_blocking(move || {
         let player = PlayerController::new().expect("libmpv starts");
         player.active_deck().set("mute", "yes").unwrap();
-        player.play(&url, Some(&id)).unwrap();
+        player.play(&url, Some(&id), None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         while player.current_time() <= 0.0 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
