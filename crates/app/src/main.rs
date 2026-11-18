@@ -681,8 +681,7 @@ impl App {
                     Ok(sections) if dev_autoplay(true) && self.player.song().is_none() => sections
                         .iter()
                         .map(|section| ui::songs_of(&section.items))
-                        // The top result card carries no artists, so no lyrics either.
-                        .find(|songs| songs.first().is_some_and(|song| !song.artists.is_empty())),
+                        .find(|songs| !songs.is_empty()),
                     _ => None,
                 };
                 self.results = Some(loaded(result));
