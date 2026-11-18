@@ -9,7 +9,7 @@ use iced::widget::{Space, button, column, container, image, row, scrollable, sta
 use iced::{
     Alignment, Background, Border, Color, ContentFit, Element, Gradient, Length, Padding, Radians,
 };
-use trop::networking::models::yt_item::{SongItem, YTArtist, YTItem};
+use trop::networking::models::yt_item::{EpisodeItem, SongItem, YTArtist, YTItem};
 
 use crate::{Message, Route, glass, theme, title_bar};
 
@@ -47,27 +47,34 @@ pub fn scroll_page<'a>(sections: Vec<Element<'a, Message>>) -> Element<'a, Messa
 }
 
 /// A titled section: tiles, or compact song cells when every item is a song.
+/// The song whose id is `playing` shows its title in teal.
 pub fn section<'a>(
     covers: &'a Covers,
     title: &'a str,
     items: &'a [YTItem],
     limit: usize,
+    playing: Option<&str>,
 ) -> Element<'a, Message> {
     let songs = songs_of(items);
     let items = items.iter().take(limit);
     let songs_only = items.clone().all(|item| matches!(item, YTItem::Song(_)));
+    let is_playing = |item: &YTItem| playing.is_some() && item.video_id() == playing;
     let body: Element<'a, Message> = if songs_only {
-        iced::widget::Row::with_children(items.map(|item| song_cell(covers, item, &songs)))
-            .spacing(12)
-            .wrap()
-            .vertical_spacing(4)
-            .into()
+        iced::widget::Row::with_children(
+            items.map(|item| song_cell(covers, item, &songs, is_playing(item))),
+        )
+        .spacing(12)
+        .wrap()
+        .vertical_spacing(4)
+        .into()
     } else {
-        iced::widget::Row::with_children(items.map(|item| tile(covers, item, &songs)))
-            .spacing(20)
-            .wrap()
-            .vertical_spacing(24)
-            .into()
+        iced::widget::Row::with_children(
+            items.map(|item| tile(covers, item, &songs, is_playing(item))),
+        )
+        .spacing(20)
+        .wrap()
+        .vertical_spacing(24)
+        .into()
     };
     column![section_title(title), body].spacing(14).into()
 }
@@ -83,18 +90,23 @@ pub fn songs_of(items: &[YTItem]) -> Arc<Vec<SongItem>> {
             .iter()
             .filter_map(|item| match item {
                 YTItem::Song(song) => Some(song.clone()),
-                YTItem::Episode(episode) => Some(SongItem {
-                    video_id: episode.video_id.clone(),
-                    title: episode.title.clone(),
-                    artists: episode.artists.clone(),
-                    duration: episode.duration,
-                    thumbnail_url: episode.thumbnail_url.clone(),
-                    ..SongItem::default()
-                }),
+                YTItem::Episode(episode) => Some(episode_song(episode)),
                 _ => None,
             })
             .collect(),
     )
+}
+
+/// A podcast episode as a queue entry.
+pub fn episode_song(episode: &EpisodeItem) -> SongItem {
+    SongItem {
+        video_id: episode.video_id.clone(),
+        title: episode.title.clone(),
+        artists: episode.artists.clone(),
+        duration: episode.duration,
+        thumbnail_url: episode.thumbnail_url.clone(),
+        ..SongItem::default()
+    }
 }
 
 /// What a click on `item` does: play it within `songs`, or open its page.
@@ -119,6 +131,7 @@ pub fn tile<'a>(
     covers: &'a Covers,
     item: &'a YTItem,
     songs: &Arc<Vec<SongItem>>,
+    playing: bool,
 ) -> Element<'a, Message> {
     let round = matches!(item, YTItem::Artist(_));
     let content = column![
@@ -131,6 +144,7 @@ pub fn tile<'a>(
         text(fit(item.title(), TILE, 14.0))
             .size(14)
             .font(theme::weight(Weight::Medium))
+            .color(title_color(playing))
             .wrapping(text::Wrapping::None),
         text(fit(&subtitle(item), TILE, 13.0))
             .size(13)
@@ -148,6 +162,7 @@ pub fn song_cell<'a>(
     covers: &'a Covers,
     item: &'a YTItem,
     songs: &Arc<Vec<SongItem>>,
+    playing: bool,
 ) -> Element<'a, Message> {
     let content = row![
         cover(covers, item.thumbnail_url(), ROW_COVER, 6.0),
@@ -155,6 +170,7 @@ pub fn song_cell<'a>(
             text(fit(item.title(), SONG_TEXT, 14.0))
                 .size(14)
                 .font(theme::weight(Weight::Medium))
+                .color(title_color(playing))
                 .wrapping(text::Wrapping::None),
             text(fit(&subtitle(item), SONG_TEXT, 13.0))
                 .size(13)
@@ -168,6 +184,11 @@ pub fn song_cell<'a>(
     .align_y(Alignment::Center)
     .width(300);
     clickable(content, open(item, songs), 8.0)
+}
+
+/// Teal for the playing song's title, white otherwise.
+fn title_color(playing: bool) -> Color {
+    if playing { theme::ACCENT } else { theme::TEXT }
 }
 
 /// Height of a `track_row`.
@@ -202,14 +223,14 @@ pub fn track_row<'a>(
         .center_x(28)
         .into()
     };
-    let title_color = if playing { theme::ACCENT } else { theme::TEXT };
+
     let content = row![
         lead,
         column![
             text(title)
                 .size(14)
                 .font(theme::weight(Weight::Medium))
-                .color(title_color)
+                .color(title_color(playing))
                 .wrapping(text::Wrapping::None),
             text(subtitle)
                 .size(13)
@@ -469,6 +490,40 @@ pub fn glass_panel<'a>(
         .width(width)
         .height(height)
         .into()
+}
+
+/// The fade under the top strip while a page is scrolled (iOS 26 scroll edge).
+pub fn scroll_edge<'a>() -> Element<'a, Message> {
+    let fade = Linear::new(Radians(std::f32::consts::PI))
+        .add_stop(
+            0.0,
+            Color {
+                a: 0.9,
+                ..theme::BACKGROUND
+            },
+        )
+        .add_stop(
+            0.55,
+            Color {
+                a: 0.6,
+                ..theme::BACKGROUND
+            },
+        )
+        .add_stop(1.0, Color::TRANSPARENT);
+    container(
+        container(Space::new())
+            .width(Length::Fill)
+            .height(title_bar::HEIGHT + 24.0)
+            .style(move |_| container::Style {
+                background: Some(Background::Gradient(Gradient::Linear(fade))),
+                ..container::Style::default()
+            }),
+    )
+    .padding(Padding {
+        left: theme::INSET + theme::SIDEBAR_WIDTH,
+        ..Padding::ZERO
+    })
+    .into()
 }
 
 /// A faint wash behind everything.

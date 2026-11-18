@@ -20,7 +20,11 @@ use crate::{Load, Message, Route, theme, virtual_list};
 
 pub const SEARCH_INPUT: &str = "search";
 
-pub fn home<'a>(covers: &'a Covers, home: &'a Load<Vec<HomeSection>>) -> Element<'a, Message> {
+pub fn home<'a>(
+    covers: &'a Covers,
+    home: &'a Load<Vec<HomeSection>>,
+    playing: Option<&str>,
+) -> Element<'a, Message> {
     let sections = match home {
         Load::Loaded(sections) => sections,
         Load::Loading => return ui::status(None, Message::Retry),
@@ -32,30 +36,46 @@ pub fn home<'a>(covers: &'a Covers, home: &'a Load<Vec<HomeSection>>) -> Element
             .filter(|section| !section.items().is_empty())
             .map(|section| {
                 let limit = if section.is_songs_only() { 12 } else { 10 };
-                ui::section(covers, section.display_title(), section.items(), limit)
+                ui::section(
+                    covers,
+                    section.display_title(),
+                    section.items(),
+                    limit,
+                    playing,
+                )
             })
             .collect(),
     )
 }
 
 /// Explore feed, or a mood's page: shelves of rows and cards, mood chips.
-pub fn explore<'a>(covers: &'a Covers, sections: &'a [ExploreSection]) -> Element<'a, Message> {
+pub fn explore<'a>(
+    covers: &'a Covers,
+    sections: &'a [ExploreSection],
+    playing: Option<&str>,
+) -> Element<'a, Message> {
     ui::scroll_page(
         sections
             .iter()
             .filter(|section| !section.items.is_empty() || !section.moods.is_empty())
             .map(|section| match section.kind {
                 ExploreSectionKind::Moods => moods(&section.title, &section.moods),
-                ExploreSectionKind::Rows => ui::section(covers, &section.title, &section.items, 12),
+                ExploreSectionKind::Rows => {
+                    ui::section(covers, &section.title, &section.items, 12, playing)
+                }
                 ExploreSectionKind::Cards => {
-                    ui::section(covers, &section.title, &section.items, 10)
+                    ui::section(covers, &section.title, &section.items, 10, playing)
                 }
             })
             .collect(),
     )
 }
 
+/// Mood chips: one line each, so every chip in a row has the same height.
 fn moods<'a>(title: &'a str, moods: &'a [MoodItem]) -> Element<'a, Message> {
+    const CHIP: f32 = 228.0;
+    // Chip width minus padding, swatch and gap.
+    const LABEL: f32 = CHIP - 2.0 * 14.0 - 4.0 - 12.0;
     let chips = moods.iter().map(|mood| {
         let color = mood
             .color
@@ -72,15 +92,16 @@ fn moods<'a>(title: &'a str, moods: &'a [MoodItem]) -> Element<'a, Message> {
         button(
             row![
                 swatch,
-                text(ui::fit(&mood.title, 150.0, 14.0))
+                text(ui::fit(&mood.title, LABEL, 14.0))
                     .size(14)
                     .font(theme::weight(Weight::Medium))
+                    .wrapping(text::Wrapping::None)
             ]
             .spacing(12)
             .align_y(Alignment::Center),
         )
         .padding([10, 14])
-        .width(196)
+        .width(CHIP)
         .on_press(Message::Navigate(Route::Mood(mood.clone())))
         .style(|_, status| button::Style {
             background: Some(Background::Color(if status == button::Status::Hovered {
@@ -110,8 +131,9 @@ pub fn search<'a>(
     covers: &'a Covers,
     query: &'a str,
     results: Option<&'a Load<Vec<SearchSection>>>,
+    playing: Option<&str>,
 ) -> Element<'a, Message> {
-    let field = text_input("Songs, albums, artists, playlists", query)
+    let field = text_input("Songs, albums, artists, playlists, podcasts", query)
         .id(SEARCH_INPUT)
         .on_input(Message::SearchInput)
         .on_submit(Message::SearchSubmit)
@@ -138,7 +160,11 @@ pub fn search<'a>(
     match results {
         None => {}
         Some(Load::Loading) => page.push(text("Searching…").color(theme::SECONDARY).into()),
-        Some(Load::Failed(error)) => page.push(text(error.as_str()).color(theme::SECONDARY).into()),
+        Some(Load::Failed(error)) => page.push(
+            text(format!("Search failed: {error}. Press Enter to try again."))
+                .color(theme::SECONDARY)
+                .into(),
+        ),
         Some(Load::Loaded(sections)) if sections.is_empty() => {
             page.push(text("No results").color(theme::SECONDARY).into());
         }
@@ -146,7 +172,7 @@ pub fn search<'a>(
             sections
                 .iter()
                 .filter(|section| !section.items.is_empty())
-                .map(|section| ui::section(covers, &section.title, &section.items, 12)),
+                .map(|section| ui::section(covers, &section.title, &section.items, 12, playing)),
         ),
     }
     ui::scroll_page(page)
@@ -245,7 +271,7 @@ pub fn artist<'a>(
     }
     // Shelves of albums, singles, playlists and related artists, kept as YTItems.
     for (title, items) in shelves(related) {
-        page.push(ui::section(covers, title, items, 10));
+        page.push(ui::section(covers, title, items, 10, playing));
     }
     if let Some(about) = artist.description_text.as_deref().filter(|d| !d.is_empty()) {
         page.push(

@@ -25,7 +25,7 @@ use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
 use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem};
-use trop::networking::models::yt_item::{EpisodeItem, SongItem, YTItem};
+use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
 use services::{Artwork, Services};
@@ -49,7 +49,7 @@ pub fn main() -> iced::Result {
             text_color: theme::TEXT,
         })
         .window(window::Settings {
-            size: Size::new(1280.0, 800.0),
+            size: dev_size().unwrap_or(Size::new(1280.0, 800.0)),
             min_size: Some(Size::new(880.0, 560.0)),
             decorations: false,
             #[cfg(target_os = "linux")]
@@ -168,7 +168,7 @@ impl Detail {
 
     /// The episodes as songs, one for one, so a row's index plays its episode.
     fn podcast(info: PodcastDetailInfo) -> Self {
-        let songs = info.episodes.iter().map(episode_song).collect();
+        let songs = info.episodes.iter().map(ui::episode_song).collect();
         Self::Podcast {
             songs: Arc::new(songs),
             info,
@@ -350,9 +350,18 @@ impl App {
             Err(_) => Task::none(),
         };
         let enter = app.enter();
+        // Dev aid: WOOF_SCROLL=px scrolls the page once it has loaded.
+        let scroll = match std::env::var("WOOF_SCROLL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            Some(offset) => Task::future(tokio::time::sleep(Duration::from_secs(4)))
+                .then(move |_| scroll_page_to(offset)),
+            None => Task::none(),
+        };
         (
             app,
-            Task::batch([load_home(&services), enter, search, snapshot_task()]),
+            Task::batch([load_home(&services), enter, search, scroll, snapshot_task()]),
         )
     }
 
@@ -752,7 +761,16 @@ impl App {
             ),
             None => (ui::wash(), self.page()),
         };
-        let mut layers = stack![backdrop, page, sidebar(&self.stack[0].route)];
+        let mut layers = stack![backdrop, page];
+        // Scrolled content fades out under the back and window buttons.
+        let scrolled = match self.route() {
+            Route::Library => self.library.offset_y,
+            _ => self.stack.last().map_or(0.0, |entry| entry.offset),
+        } > 0.0;
+        if now_playing.is_none() && scrolled {
+            layers = layers.push(ui::scroll_edge());
+        }
+        let mut layers = layers.push(sidebar(&self.stack[0].route));
         if self.queue_open && self.player.song().is_some() {
             layers = layers.push(now_playing::queue(
                 &self.covers,
@@ -779,11 +797,11 @@ impl App {
         let covers = &self.covers;
         let playing = self.player.song().map(|song| song.video_id.as_str());
         match self.route() {
-            Route::Home => pages::home(covers, &self.home),
+            Route::Home => pages::home(covers, &self.home, playing),
             Route::Library => pages::library(&self.library),
-            Route::Search => pages::search(covers, &self.query, self.results.as_ref()),
+            Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
             Route::Explore => match &self.explore {
-                Some(Load::Loaded(sections)) => pages::explore(covers, sections),
+                Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                 _ => ui::status(None, Message::Retry),
             },
@@ -799,7 +817,7 @@ impl App {
                         pages::playlist(covers, info, songs, playing)
                     }
                     Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
-                    Detail::Mood(sections) => pages::explore(covers, sections),
+                    Detail::Mood(sections) => pages::explore(covers, sections, playing),
                 },
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                 _ => ui::status(None, Message::Retry),
@@ -897,7 +915,9 @@ impl App {
             });
         let content = row![
             container(now_playing).width(Length::FillPortion(1)),
-            container(transport).center_x(Length::FillPortion(1)),
+            // Transport takes its own width, so the seek slider gets the rest
+            // of a narrow window; equal sides keep it centred.
+            transport,
             row![seek, queue]
                 .spacing(14)
                 .align_y(Alignment::Center)
@@ -922,18 +942,6 @@ impl App {
         })
         .align_bottom(Length::Fill)
         .into()
-    }
-}
-
-/// A podcast episode as a queue entry.
-fn episode_song(episode: &EpisodeItem) -> SongItem {
-    SongItem {
-        video_id: episode.video_id.clone(),
-        title: episode.title.clone(),
-        artists: episode.artists.clone(),
-        duration: episode.duration,
-        thumbnail_url: episode.thumbnail_url.clone(),
-        ..SongItem::default()
     }
 }
 
@@ -1021,6 +1029,13 @@ fn dev_route() -> Option<Route> {
             _ => None,
         },
     }
+}
+
+/// Dev aid: WOOF_SIZE=880x560 sets the window size.
+fn dev_size() -> Option<Size> {
+    let size = std::env::var("WOOF_SIZE").ok()?;
+    let (width, height) = size.split_once('x')?;
+    Some(Size::new(width.parse().ok()?, height.parse().ok()?))
 }
 
 /// Dev aid: WOOF_SNAPSHOT=/path.png saves the window contents after
