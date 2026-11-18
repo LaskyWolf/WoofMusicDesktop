@@ -10,12 +10,17 @@ use swiftytube::auth::session_importer::SessionImporter;
 use swiftytube::core::swiftytube_config::SwiftyTubeConfig;
 use swiftytube::core::youtube_client::YouTubeClient;
 use swiftytube::networking::artwork_urls::ArtworkURLs;
+use swiftytube::networking::http_client::Session;
 use swiftytube::networking::inner_tube_client::InnerTubeClient;
 use swiftytube::streaming::stream_cache::StreamCache;
 use swiftytube::streaming::stream_fallback::{StreamFallback, StreamResolveRequest};
 use swiftytube::streaming::stream_resolver::{StreamResolveOptions, StreamResolveProviders};
 use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
+use trop::audio::lyrics::lyrics_manager::LyricsManager;
+use trop::audio::lyrics::lyrics_service::{LyricLine, LyricsService, LyricsSong};
+use trop::audio::lyrics::lyrics_view;
+use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::database::database_service::DatabaseService;
 use trop::database::entities::playlist_entity::PlaylistEntity;
@@ -45,8 +50,27 @@ pub struct Services {
     /// The synced library; in memory when the file cannot open.
     pub db: Arc<DatabaseService>,
     sync: SyncBridge,
+    lyrics: Arc<LyricsService>,
     providers: StreamResolveProviders,
     http: reqwest::Client,
+}
+
+/// A song's lyrics as Now Playing lists them.
+#[derive(Debug)]
+pub struct Lyrics {
+    /// Without the instrumental markers. Empty: no provider had lyrics.
+    pub lines: Vec<LyricLine>,
+    /// Each line's romanization, when its script has one.
+    pub romanized: Vec<Option<String>>,
+    /// The provider that answered, for the credit under the lines.
+    pub provider: Option<String>,
+}
+
+impl Lyrics {
+    /// Lines with start times scroll along with the song; others are a plain text.
+    pub fn synced(&self) -> bool {
+        self.lines.iter().any(|line| line.start_time.is_some())
+    }
 }
 
 impl Services {
@@ -76,12 +100,53 @@ impl Services {
             .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-sync.json"));
         Arc::new(Self {
             sync: SyncBridge::new(client.clone(), db.clone(), last_sync),
+            lyrics: Arc::new(LyricsService::new(
+                LyricsManager::new(Session::shared()),
+                LyricsService::default_defaults_path()
+                    .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-lyrics.json")),
+            )),
             client,
             player,
             db,
             providers: StreamResolveProviders::live(),
             http: reqwest::Client::new(),
         })
+    }
+
+    /// Fetches `song`'s lyrics from the Trop providers and romanizes them.
+    /// A provider that answered without lyrics is not an error: the lines are empty.
+    pub async fn lyrics(self: Arc<Self>, song: SongItem) -> Result<Arc<Lyrics>, String> {
+        let query = LyricsSong {
+            video_id: song.video_id.clone(),
+            title: song.title,
+            artist: crate::ui::artists(&song.artists),
+            album: song.album.filter(|album| !album.is_empty()),
+            duration: song.duration as f64,
+        };
+        let lines = match self.lyrics.fetch_lyrics(&query).await {
+            Ok(lines) => lyrics_view::display_lines(&lines),
+            Err(error) if error.is_answer() => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let provider = self
+            .lyrics
+            .state()
+            .provider_names
+            .get(&song.video_id)
+            .cloned();
+        blocking(move || {
+            let romanized = lines
+                .iter()
+                .map(|line| LyricsRomanizer::romanize(&line.text))
+                .collect();
+            Arc::new(Lyrics {
+                lines,
+                romanized,
+                provider,
+            })
+        })
+        .await
+        .ok_or_else(|| "Romanizing the lyrics failed".to_owned())
     }
 
     pub async fn load_home(self: Arc<Self>) -> Result<Vec<HomeSection>, String> {

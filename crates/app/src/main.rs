@@ -31,7 +31,7 @@ use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
 use pages::LibraryFilter;
-use services::{Artwork, Library, Services};
+use services::{Artwork, Library, Lyrics, Services};
 use swiftytube::auth::account_info::AccountInfo;
 use trop::playback::playback_state_service::{PlayRecord, PlaybackStateService};
 
@@ -254,6 +254,10 @@ struct App {
     /// Now Playing covers the page.
     now_playing: bool,
     queue_open: bool,
+    /// Now Playing splits into the cover and the lyrics.
+    lyrics_open: bool,
+    /// The current song's lyrics, with its video id; fetched as each song starts.
+    lyrics: Option<(String, Load<Arc<Lyrics>>)>,
     queue_list: virtual_list::State,
     /// The current song's large cover and colours, with its video id.
     artwork: Option<(String, Artwork)>,
@@ -344,6 +348,11 @@ pub enum Message {
     Artwork(String, Option<Artwork>),
     ToggleNowPlaying,
     ToggleQueue,
+    ToggleLyrics,
+    LyricsLoaded(String, Result<Arc<Lyrics>, String>),
+    RetryLyrics,
+    /// A lyric line was clicked: the song jumps to where it starts.
+    SeekTo(f64),
     QueueScrolled(scrollable::Viewport),
     /// Escape: close the queue, then Now Playing.
     Dismiss,
@@ -387,6 +396,9 @@ impl App {
             // Dev aids: WOOF_NOW_PLAYING=1 and WOOF_QUEUE=1 open them once a song plays.
             now_playing: std::env::var("WOOF_NOW_PLAYING").is_ok(),
             queue_open: std::env::var("WOOF_QUEUE").is_ok(),
+            // Dev aid: WOOF_LYRICS=1 opens Now Playing on the lyrics.
+            lyrics_open: std::env::var("WOOF_LYRICS").is_ok(),
+            lyrics: None,
             queue_list: virtual_list::State::default(),
             artwork: None,
             plays: PlaybackStateService::default(),
@@ -565,8 +577,9 @@ impl App {
                 scroll_page_to(0.0)
             }
             Message::HomeLoaded(Ok(sections)) => {
-                // Dev aid: WOOF_PLAY=1 plays the first Home section with songs.
-                let autoplay = std::env::var("WOOF_PLAY").is_ok().then(|| {
+                // Dev aid: WOOF_PLAY=1 plays the first Home section with songs
+                // (with WOOF_SEARCH, the first songs found instead).
+                let autoplay = dev_autoplay(false).then(|| {
                     sections
                         .iter()
                         .map(|section| ui::songs_of(section.items()))
@@ -633,8 +646,19 @@ impl App {
                     ),
                     Err(_) => Task::none(),
                 };
+                let autoplay = match &result {
+                    Ok(sections) if dev_autoplay(true) && self.player.song().is_none() => sections
+                        .iter()
+                        .map(|section| ui::songs_of(&section.items))
+                        // The top result card carries no artists, so no lyrics either.
+                        .find(|songs| songs.first().is_some_and(|song| !song.artists.is_empty())),
+                    _ => None,
+                };
                 self.results = Some(loaded(result));
-                covers
+                match autoplay {
+                    Some(songs) => Task::batch([covers, self.play(songs, 0)]),
+                    None => covers,
+                }
             }
             Message::Retry => {
                 match self.route().clone() {
@@ -715,12 +739,40 @@ impl App {
                 if !self.queue_open {
                     return Task::none();
                 }
+                // The queue panel would cover the lyrics.
+                self.lyrics_open = false;
                 // Open on the playing song, a few rows below the top.
                 let y = (self.player.index.saturating_sub(2)) as f32 * ui::TRACK_ROW;
                 scroll_to(
                     now_playing::QUEUE_SCROLL,
                     scrollable::AbsoluteOffset { x: 0.0, y },
                 )
+            }
+            Message::ToggleLyrics => {
+                if self.lyrics_open && self.now_playing {
+                    self.lyrics_open = false;
+                } else {
+                    self.lyrics_open = true;
+                    self.queue_open = false;
+                    self.now_playing = self.player.song().is_some();
+                }
+                Task::none()
+            }
+            Message::LyricsLoaded(video_id, result) => {
+                if let Some((id, lyrics)) = &mut self.lyrics
+                    && *id == video_id
+                {
+                    *lyrics = match result {
+                        Ok(lines) => Load::Loaded(lines),
+                        Err(error) => Load::Failed(error),
+                    };
+                }
+                Task::none()
+            }
+            Message::RetryLyrics => self.fetch_lyrics(),
+            Message::SeekTo(position) => {
+                self.player.seeking = Some(position);
+                self.update(Message::Seek)
             }
             Message::QueueScrolled(viewport) => {
                 self.queue_list.update(viewport);
@@ -729,6 +781,9 @@ impl App {
             Message::Dismiss => {
                 if self.queue_open {
                     self.queue_open = false;
+                    Task::none()
+                } else if self.lyrics_open && self.now_playing {
+                    self.lyrics_open = false;
                     Task::none()
                 } else {
                     self.close_now_playing()
@@ -894,7 +949,20 @@ impl App {
             self.fetch_covers(cover),
             artwork,
             saved,
+            self.fetch_lyrics(),
         ])
+    }
+
+    /// Fetches the current song's lyrics, so they are there when Now Playing shows them.
+    fn fetch_lyrics(&mut self) -> Task<Message> {
+        let Some(song) = self.player.song().cloned() else {
+            return Task::none();
+        };
+        let video_id = song.video_id.clone();
+        self.lyrics = Some((video_id.clone(), Load::Loading));
+        Task::perform(self.services.clone().lyrics(song), move |result| {
+            Message::LyricsLoaded(video_id.clone(), result)
+        })
     }
 
     /// Starts downloading the covers not cached or already requested.
@@ -934,10 +1002,16 @@ impl App {
             media_controls::events(),
         ];
         if self.player.song().is_some() {
+            // Lyric lines change on the beat; the seek bar alone is fine at half a second.
+            let every = if self.showing_lyrics() { 150 } else { 500 };
             subscriptions
-                .push(iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick));
+                .push(iced::time::every(Duration::from_millis(every)).map(|_| Message::Tick));
         }
         Subscription::batch(subscriptions)
+    }
+
+    fn showing_lyrics(&self) -> bool {
+        self.lyrics_open && self.now_playing && self.player.song().is_some()
     }
 
     /// The artwork of the playing song, once it has loaded.
@@ -954,7 +1028,18 @@ impl App {
         let (backdrop, page) = match now_playing {
             Some(song) => (
                 now_playing::background(self.current_artwork()),
-                now_playing::view(&self.covers, self.current_artwork(), song, self.queue_open),
+                now_playing::view(
+                    &self.covers,
+                    self.current_artwork(),
+                    song,
+                    self.queue_open,
+                    self.lyrics
+                        .as_ref()
+                        .filter(|(id, _)| self.lyrics_open && *id == song.video_id)
+                        .map(|(_, lyrics)| {
+                            (lyrics, self.player.seeking.unwrap_or(self.player.position))
+                        }),
+                ),
             ),
             None => (ui::wash(), self.page()),
         };
@@ -1114,19 +1199,24 @@ impl App {
         } else {
             Space::new().width(Length::Fill).into()
         };
-        let queue = transport_button(icons::QUEUE, 20.0, has_song.then_some(Message::ToggleQueue))
-            .style(|_, status| button::Style {
-                background: (self.queue_open || status == button::Status::Hovered)
-                    .then_some(Background::Color(theme::PRESSED)),
-                border: Border::default().rounded(22),
-                ..button::Style::default()
-            });
+        let toggle = |icon, message, on: bool| {
+            transport_button(icon, 20.0, has_song.then_some(message)).style(move |_, status| {
+                button::Style {
+                    background: (on || status == button::Status::Hovered)
+                        .then_some(Background::Color(theme::PRESSED)),
+                    border: Border::default().rounded(22),
+                    ..button::Style::default()
+                }
+            })
+        };
+        let lyrics = toggle(icons::LYRICS, Message::ToggleLyrics, self.showing_lyrics());
+        let queue = toggle(icons::QUEUE, Message::ToggleQueue, self.queue_open);
         let content = row![
             container(now_playing).width(Length::FillPortion(1)),
             // Transport takes its own width, so the seek slider gets the rest
             // of a narrow window; equal sides keep it centred.
             transport,
-            row![seek, queue]
+            row![seek, row![lyrics, queue].spacing(4)]
                 .spacing(14)
                 .align_y(Alignment::Center)
                 .width(Length::FillPortion(1)),
@@ -1292,6 +1382,11 @@ fn dev_route() -> Option<Route> {
     }
 }
 
+/// WOOF_PLAY=1 plays from Home, or from the results when WOOF_SEARCH is set.
+fn dev_autoplay(search: bool) -> bool {
+    std::env::var("WOOF_PLAY").is_ok() && std::env::var("WOOF_SEARCH").is_ok() == search
+}
+
 /// Dev aid: WOOF_SIZE=880x560 sets the window size.
 fn dev_size() -> Option<Size> {
     let size = std::env::var("WOOF_SIZE").ok()?;
@@ -1446,6 +1541,8 @@ mod icons {
     pub const PAUSE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1.2" fill="#fff"/><rect x="14" y="4.5" width="4" height="15" rx="1.2" fill="#fff"/></svg>"##;
     pub const NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4L4.2 5.5a.8.8 0 0 0-1.2.7zM12 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4l-8.6-5.8a.8.8 0 0 0-1.2.7z" fill="#fff"/></svg>"##;
     pub const PREVIOUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7zM12 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7z" fill="#fff"/></svg>"##;
+    /// A speech bubble with two lines of text.
+    pub const LYRICS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-4.2 3.3a.5.5 0 0 1-.8-.4V16.5h-.5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8 9.3h8M8 12.5h5"/></g></svg>"##;
     pub const QUEUE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h11M4 12h11M4 18h7"/></g><path d="M16 14.6v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z" fill="#fff"/></svg>"##;
     pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.4 4.5 7 4.5c2.1 0 3.6 1.1 5 3 1.4-1.9 2.9-3 5-3 3.6 0 5.6 3.5 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" fill="#fff"/></svg>"##;
     pub const TROPHY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 3h10v2h3.2a.8.8 0 0 1 .8.8V8a4 4 0 0 1-4.3 4A5 5 0 0 1 13 14.9V18h3a1 1 0 0 1 1 1v2H7v-2a1 1 0 0 1 1-1h3v-3.1A5 5 0 0 1 7.3 12 4 4 0 0 1 3 8V5.8a.8.8 0 0 1 .8-.8H7zm0 4H5v1a2 2 0 0 0 2 2zm10 0v3a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>"##;
