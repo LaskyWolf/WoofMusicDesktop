@@ -37,13 +37,16 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
 | `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
 | `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
+| `enum LyricsRomanizer` with `+<Script>` extension files | `struct LyricsRomanizer`; each extension file is an `impl LyricsRomanizer` block in `audio/lyrics/romanizer/<script>.rs` |
+| Swift dictionaries of letter readings (`[Character: String]`, `[UInt32: String]`) | `match` functions returning `Option<&'static str>` |
+| `CFStringTransform(..., kCFStringTransformMandarinLatin, ...)` in `LyricsRomanizer+Chinese` | `pinyin` crate (`with_tone`), one reading per character, adjacent syllables space-separated |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`).
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`), `Audio/Lyrics/Romanizer/` (`LyricsRomanizer` and all 11 script files).
 
 Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync.
 
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`. `lyrics_romanizer_test.rs` has no Swift or Dart counterpart: its expected outputs are traced from the Swift rules, and standard Hanyu Pinyin for Chinese.

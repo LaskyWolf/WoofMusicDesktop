@@ -7,6 +7,7 @@ version.workspace = true
 [dependencies]
 libmpv2 = { version = "7", default-features = false }
 log = "0.4.35"
+pinyin = { version = "0.11.0", default-features = false, features = ["with_tone"] }
 regex = "1.13.1"
 reqwest = "0.13.5"
 rusqlite = { version = "0.43.0", features = ["bundled"] }
