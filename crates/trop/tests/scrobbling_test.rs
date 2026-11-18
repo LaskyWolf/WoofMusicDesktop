@@ -288,6 +288,83 @@ async fn last_fm_scrobbles_at_half_the_song_or_the_delay_counting_only_play_time
     assert_eq!(lastfm.service.token_store.retrieve_username(), None);
 }
 
+/// Scrobbling on, signed in as "woofuser" with session key "sk1".
+fn signed_in_last_fm(session: Session, name: &str) -> LastFMIntegration {
+    mock_keyring();
+    let defaults = temp_path(name);
+    LastFMSettings {
+        scrobbling_enabled: true,
+        ..LastFMSettings::default()
+    }
+    .save(&defaults)
+    .unwrap();
+    let mut lastfm = LastFMIntegration::new(session, defaults);
+    lastfm.service.api_key = "key".into();
+    lastfm.service.secret = "secret".into();
+    lastfm.service.token_store.store("sk1", "woofuser").unwrap();
+    lastfm
+}
+
+fn scrobbles(sent: &Mutex<Vec<Sent>>) -> Vec<HashMap<String, String>> {
+    sent.lock()
+        .unwrap()
+        .iter()
+        .map(Sent::form)
+        .filter(|form| form["method"] == "track.scrobble")
+        .collect()
+}
+
+#[tokio::test]
+async fn last_fm_scrobbles_a_song_whose_length_arrives_after_it_starts() {
+    let (session, sent) = recording_session(|_, _| (200, fixture("last_fm/scrobble.json")));
+    let mut lastfm = signed_in_last_fm(session, "late-length");
+
+    // The player knows the length a moment after the song starts.
+    lastfm
+        .sync_state(Some(&song("eeeeeeeeeee", 0.0, true)), at(1_000))
+        .await;
+    let e = song("eeeeeeeeeee", 180.0, true);
+    lastfm.sync_state(Some(&e), at(1_001)).await;
+    lastfm.sync_state(Some(&e), at(1_090)).await;
+    assert!(scrobbles(&sent).is_empty());
+    lastfm.sync_state(Some(&e), at(1_091)).await;
+    assert_eq!(scrobbles(&sent).len(), 1);
+    assert_eq!(scrobbles(&sent)[0]["duration[0]"], "180");
+}
+
+#[tokio::test]
+async fn last_fm_resends_a_failed_scrobble_after_the_next_one_succeeds() {
+    let calls = Arc::new(Mutex::new(0));
+    let counter = calls.clone();
+    let (session, sent) = recording_session(move |_, body| {
+        let mut calls = counter.lock().unwrap();
+        *calls += 1;
+        if body.contains("method=track.scrobble") && *calls == 1 {
+            (
+                200,
+                br#"{"error":16,"message":"temporarily unavailable"}"#.to_vec(),
+            )
+        } else {
+            (200, fixture("last_fm/scrobble.json"))
+        }
+    });
+    let mut lastfm = signed_in_last_fm(session, "retry");
+
+    let f = song("fffffffffff", 180.0, true);
+    lastfm.sync_state(Some(&f), at(1_000)).await;
+    lastfm.sync_state(Some(&f), at(1_090)).await;
+    assert_eq!(scrobbles(&sent).len(), 1);
+
+    let g = song("ggggggggggg", 180.0, true);
+    lastfm.sync_state(Some(&g), at(2_000)).await;
+    lastfm.sync_state(Some(&g), at(2_090)).await;
+    let timestamps: Vec<_> = scrobbles(&sent)
+        .iter()
+        .map(|form| form["timestamp[0]"].clone())
+        .collect();
+    assert_eq!(timestamps, ["1000", "2000", "1000"]);
+}
+
 #[test]
 fn last_fm_settings_round_trip_under_swift_keys() {
     let path = temp_path("settings");

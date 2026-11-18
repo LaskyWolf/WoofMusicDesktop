@@ -12,8 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use swiftytube::networking::http_client::Session;
 
 use super::last_fm_defaults::LastFMSettings;
-use super::last_fm_service::LastFMService;
+use super::last_fm_service::{LastFMError, LastFMService};
 use super::last_fm_token_store::LastFMTokenStore;
+
+/// Failed scrobbles kept for a retry; past this the oldest is dropped.
+const MAX_FAILED_SCROBBLES: usize = 50;
 
 /// What the scrobblers read from Swift's `NowPlaying.shared`. The app fills
 /// it from its player; ListenBrainz uses it too.
@@ -44,6 +47,19 @@ pub struct LastFMIntegration {
     current_song: Option<PlayingSong>,
     was_playing: bool,
     last_scrobbled_video_id: Option<String>,
+    /// Oldest first. Kept in memory only, so they are lost at quit.
+    failed_scrobbles: Vec<Scrobble>,
+}
+
+/// A scrobble Last.fm has not accepted yet.
+#[derive(Clone, Debug)]
+struct Scrobble {
+    artist: String,
+    track: String,
+    /// Seconds since 1970 when the song started.
+    timestamp: i64,
+    album: Option<String>,
+    duration: Option<i64>,
 }
 
 impl LastFMIntegration {
@@ -60,6 +76,7 @@ impl LastFMIntegration {
             current_song: None,
             was_playing: false,
             last_scrobbled_video_id: None,
+            failed_scrobbles: Vec::new(),
         }
     }
 
@@ -100,6 +117,17 @@ impl LastFMIntegration {
         let current_id = self.current_song.as_ref().map(|s| s.video_id.as_str());
         if current_id != Some(song.video_id.as_str()) {
             self.on_song_stop();
+            self.current_song = Some(song.clone());
+            self.was_playing = song.is_playing;
+            self.on_song_start(&settings, song.is_playing, now).await;
+        } else if !self.song_started
+            && song.duration > 0.0
+            && self
+                .current_song
+                .as_ref()
+                .is_some_and(|s| s.duration <= 0.0)
+        {
+            // The player knows the length only a moment after the song starts.
             self.current_song = Some(song.clone());
             self.was_playing = song.is_playing;
             self.on_song_start(&settings, song.is_playing, now).await;
@@ -231,19 +259,47 @@ impl LastFMIntegration {
         }
         self.last_scrobbled_video_id = Some(song.video_id.clone());
         let duration = song.duration as i64;
-        let sent = self
+        let scrobble = Scrobble {
+            artist: song.artist,
+            track: song.title,
+            timestamp: self.song_started_at_sec,
+            album: song.album,
+            duration: (duration > 0).then_some(duration),
+        };
+        if self.send(scrobble).await && !self.failed_scrobbles.is_empty() {
+            // Last.fm answers again: resend the oldest failed scrobble.
+            let oldest = self.failed_scrobbles.remove(0);
+            self.send(oldest).await;
+        }
+    }
+
+    /// True when Last.fm accepted it. A failure worth retrying joins `failed_scrobbles`.
+    async fn send(&mut self, scrobble: Scrobble) -> bool {
+        let result = self
             .service
             .scrobble(
-                &song.artist,
-                &song.title,
-                self.song_started_at_sec,
-                song.album.as_deref(),
+                &scrobble.artist,
+                &scrobble.track,
+                scrobble.timestamp,
+                scrobble.album.as_deref(),
                 None,
-                (duration > 0).then_some(duration),
+                scrobble.duration,
             )
             .await;
-        if sent.is_err() {
-            self.last_scrobbled_video_id = None;
+        match result {
+            Ok(()) => true,
+            // Last.fm asks clients to retry 11 (offline), 16 (unavailable) and
+            // 29 (rate limit); other API errors would fail again.
+            Err(LastFMError::Api(code, _)) if ![11, 16, 29].contains(&code) => false,
+            Err(_) => {
+                // ponytail: a long outage keeps only the newest MAX_FAILED_SCROBBLES;
+                // persist the queue to disk if losing older plays matters.
+                if self.failed_scrobbles.len() >= MAX_FAILED_SCROBBLES {
+                    self.failed_scrobbles.remove(0);
+                }
+                self.failed_scrobbles.push(scrobble);
+                false
+            }
         }
     }
 
@@ -281,6 +337,7 @@ impl LastFMIntegration {
         self.on_song_stop();
         self.current_song = None;
         self.last_scrobbled_video_id = None;
+        self.failed_scrobbles.clear();
     }
 }
 
