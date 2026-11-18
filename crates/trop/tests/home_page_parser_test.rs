@@ -305,3 +305,14 @@ fn home_album_card_reads_its_artist_from_the_subtitle() {
     let names: Vec<&str> = album.artists.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["Jervis Campbell"]);
 }
+
+#[test]
+fn explicit_badge_marks_album_cards_explicit() {
+    let home = HomePageParser::parse_home_page(&fixture("home")).unwrap();
+    assert!(
+        home.sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .any(|i| matches!(i, YTItem::Album(a) if a.is_explicit))
+    );
+}

@@ -151,3 +151,12 @@ fn single_kind_word_of_an_album_row_is_not_an_artist() {
     assert_eq!(album.year, Some(2000));
     assert_eq!(names(&album.artists), ["Daft Punk"]);
 }
+
+#[test]
+fn explicit_badge_marks_song_rows_and_cards_explicit() {
+    let explicit = song_rows(&Value::Object(fixture("home")))
+        .iter()
+        .filter(|s| s.is_explicit)
+        .count();
+    assert!(explicit > 0, "home has rows with MUSIC_EXPLICIT_BADGE");
+}

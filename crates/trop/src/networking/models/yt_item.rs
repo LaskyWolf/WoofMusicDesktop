@@ -232,7 +232,7 @@ impl YTItem {
                     year,
                     thumbnail_url,
                     playlist_id: extract_playlist_id(renderer).map(str::to_string),
-                    is_explicit: false,
+                    is_explicit: has_explicit_badge(renderer),
                 }))
             }
             Some("MUSIC_PAGE_TYPE_ARTIST") => Some(YTItem::Artist(ArtistItem {
@@ -449,6 +449,7 @@ impl SongItem {
             view_count: stats.view_count,
             year: stats.year,
             is_video: stats.starts_with_video.then_some(true),
+            is_explicit: has_explicit_badge(renderer),
             music_video_type: VideoAvailability::row_music_video_type(renderer),
             ..SongItem::default()
         }
@@ -514,6 +515,7 @@ impl SongItem {
             view_count: stats.view_count,
             year: stats.year,
             is_video: stats.starts_with_video.then_some(true),
+            is_explicit: has_explicit_badge(renderer),
             music_video_type: VideoAvailability::row_music_video_type(renderer),
             ..SongItem::default()
         }
@@ -551,7 +553,7 @@ impl AlbumItem {
                 .find_map(parse_year),
             thumbnail_url: extract_two_row_thumbnail(renderer),
             playlist_id: extract_playlist_id(renderer).map(str::to_string),
-            ..AlbumItem::default()
+            is_explicit: has_explicit_badge(renderer),
         })
     }
 }
@@ -711,6 +713,17 @@ impl EpisodeItem {
 }
 
 // MARK: - Extract Helpers
+
+/// True when the row's badges (cards: `subtitleBadges`) carry the explicit icon.
+pub(crate) fn has_explicit_badge(renderer: &JsonDict) -> bool {
+    ["badges", "subtitleBadges"]
+        .into_iter()
+        .flat_map(|key| as_dict_list(renderer.get(key)).unwrap_or_default())
+        .any(|badge| {
+            InnerTubeDecode::string(&["musicInlineBadgeRenderer", "icon", "iconType"], badge)
+                == Some("MUSIC_EXPLICIT_BADGE")
+        })
+}
 
 fn two_row_title(renderer: &JsonDict) -> String {
     InnerTubeJSON::runs_text(as_dict(renderer.get("title")))
