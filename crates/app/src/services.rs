@@ -38,6 +38,7 @@ use trop::networking::models::yt_item::{
 use trop::playback::playback_state_service::{PlayRecord, save};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::services::download_manager::{DownloadManager, Resolved};
 use trop::services::sync_bridge::SyncBridge;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
@@ -49,6 +50,7 @@ pub struct Services {
     pub player: Option<Arc<PlayerController>>,
     /// The synced library; in memory when the file cannot open.
     pub db: Arc<DatabaseService>,
+    pub downloads: DownloadManager,
     sync: SyncBridge,
     lyrics: Arc<LyricsService>,
     providers: StreamResolveProviders,
@@ -98,7 +100,10 @@ impl Services {
         });
         let last_sync = IncrementalSyncService::default_defaults_path()
             .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-sync.json"));
+        let downloads_dir = DownloadManager::default_dir()
+            .unwrap_or_else(|| std::env::temp_dir().join("WoofMusic").join("Downloads"));
         Arc::new(Self {
+            downloads: DownloadManager::new(db.clone(), downloads_dir),
             sync: SyncBridge::new(client.clone(), db.clone(), last_sync),
             lyrics: Arc::new(LyricsService::new(
                 LyricsManager::new(Session::shared()),
@@ -222,6 +227,16 @@ impl Services {
                 .map_err(|error| error.to_string())?;
                 Ok(Detail::Songs(Arc::new(
                     songs.iter().map(song_item).collect(),
+                )))
+            }
+            Route::Downloads => {
+                let this = self.clone();
+                let tracks = blocking(move || this.downloads.tracks())
+                    .await
+                    .ok_or("Downloads could not be read.")?
+                    .map_err(|error| error.to_string())?;
+                Ok(Detail::Songs(Arc::new(
+                    tracks.iter().map(crate::downloads::song).collect(),
                 )))
             }
             Route::Home | Route::Explore | Route::Library | Route::Search => {
@@ -353,7 +368,13 @@ impl Services {
     }
 
     /// A playable stream URL: VISIONOS first, cipher clients after.
+    /// A downloaded song plays its saved file instead.
     pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<String, String> {
+        let this = self.clone();
+        let id = video_id.clone();
+        if let Some(Some(path)) = blocking(move || this.downloads.local_path(&id)).await {
+            return Ok(path.to_string_lossy().into_owned());
+        }
         let request = StreamResolveRequest::playback(&video_id, StreamResolveOptions::default());
         StreamFallback::resolve_first_valid(
             &request,
@@ -364,6 +385,44 @@ impl Services {
         .await
         .map(|result| result.stream_url)
         .map_err(|error| error.to_string())
+    }
+
+    /// Saves `song` for offline play: `Ok(true)` once saved, `Ok(false)` if cancelled.
+    pub async fn download(self: Arc<Self>, song: SongItem) -> Result<bool, String> {
+        let request =
+            StreamResolveRequest::download(&song.video_id, StreamResolveOptions::default());
+        let resolve = async {
+            StreamFallback::resolve_first_valid(
+                &request,
+                &self.client,
+                StreamCache::shared(),
+                &self.providers,
+            )
+            .await
+            .map(|result| Resolved {
+                url: result.stream_url,
+                mime_type: result.mime_type,
+                duration: result.duration,
+            })
+            .map_err(|error| error.to_string())
+        };
+        self.downloads.download(song, resolve).await
+    }
+
+    /// The ids of the saved songs.
+    pub async fn downloaded_ids(self: Arc<Self>) -> Vec<String> {
+        blocking(move || self.downloads.tracks())
+            .await
+            .and_then(Result::ok)
+            .map(|tracks| tracks.into_iter().map(|track| track.id).collect())
+            .unwrap_or_default()
+    }
+
+    pub async fn delete_download(self: Arc<Self>, video_id: String) -> Result<(), String> {
+        blocking(move || self.downloads.delete(&video_id))
+            .await
+            .ok_or("Deleting failed.")?
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -428,6 +487,8 @@ pub struct Library {
     /// First covers of Liked Songs and My Top 100, in the order their pages open with.
     pub liked_covers: Vec<String>,
     pub top_covers: Vec<String>,
+    pub downloaded_count: i64,
+    pub downloaded_covers: Vec<String>,
     /// Each item with the subtitle its tile shows.
     pub playlists: Vec<(YTItem, String)>,
     pub albums: Vec<(YTItem, String)>,
@@ -444,6 +505,7 @@ impl Library {
         self.liked_covers
             .iter()
             .chain(&self.top_covers)
+            .chain(&self.downloaded_covers)
             .cloned()
             .chain(tiles)
             .collect()
@@ -549,6 +611,15 @@ impl Library {
             top_covers: strings(
                 "SELECT thumbnail_url FROM song WHERE total_play_time > 0 AND thumbnail_url <> '' \
                  ORDER BY total_play_time DESC LIMIT 2",
+            )?,
+            downloaded_count: db.read(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM downloaded_track", [], |row| {
+                    row.get(0)
+                })
+            })?,
+            downloaded_covers: strings(
+                "SELECT thumbnail_url FROM downloaded_track WHERE thumbnail_url <> '' \
+                 ORDER BY downloaded_at DESC LIMIT 2",
             )?,
             playlists,
             albums,

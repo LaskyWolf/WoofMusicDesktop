@@ -1,5 +1,6 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
+mod downloads;
 mod glass;
 mod login;
 mod media_controls;
@@ -87,6 +88,8 @@ pub enum Route {
     /// Library shortcuts, read from the database.
     LikedSongs,
     TopSongs,
+    /// Saved songs and downloads in progress.
+    Downloads,
 }
 
 impl Route {
@@ -111,6 +114,7 @@ impl Route {
             )),
             Route::LikedSongs => Some("liked".to_owned()),
             Route::TopSongs => Some("top100".to_owned()),
+            Route::Downloads => Some("downloads".to_owned()),
             Route::Home | Route::Explore | Route::Library | Route::Search => None,
         }
     }
@@ -268,6 +272,7 @@ struct App {
     sign_in_error: Option<&'static str>,
     /// The cookie-paste fallback's field.
     cookie_header: String,
+    downloads: downloads::Downloads,
 }
 
 pub enum Session {
@@ -364,6 +369,7 @@ pub enum Message {
     /// A session was restored, signed in or out (`true`), or sign-in did not finish (`false`).
     SessionReady(bool),
     Account(Result<AccountInfo, String>),
+    Download(downloads::Msg),
 }
 
 impl App {
@@ -410,6 +416,7 @@ impl App {
             },
             sign_in_error: None,
             cookie_header: String::new(),
+            downloads: downloads::Downloads::default(),
         };
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -420,6 +427,7 @@ impl App {
             Err(_) => Task::none(),
         };
         let enter = app.enter();
+        let saved = downloads::load(&services);
         // Dev aid: WOOF_SCROLL=px scrolls the page once it has loaded.
         let scroll = match std::env::var("WOOF_SCROLL")
             .ok()
@@ -439,6 +447,7 @@ impl App {
                 scroll,
                 snapshot_task(),
                 media_controls::attach(),
+                saved,
             ]),
         )
     }
@@ -540,6 +549,7 @@ impl App {
                 let sync = if signed_in { self.sync() } else { Task::none() };
                 Task::batch([load_home(&self.services), self.enter(), account, sync])
             }
+            Message::Download(message) => self.update_download(message),
             Message::Account(result) => {
                 if !matches!(self.session, Session::SignedIn(_)) {
                     return Task::none();
@@ -697,7 +707,7 @@ impl App {
                         .map(|error| error.to_string()),
                 };
                 self.read_player();
-                Task::none()
+                self.dev_download()
             }
             Message::TogglePlay => {
                 if let Some(player) = &self.services.player {
@@ -1007,6 +1017,12 @@ impl App {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(every)).map(|_| Message::Tick));
         }
+        if self.downloads.running() {
+            subscriptions.push(
+                iced::time::every(Duration::from_millis(300))
+                    .map(|_| Message::Download(downloads::Msg::Tick)),
+            );
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -1110,6 +1126,9 @@ impl App {
                     }
                     Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
                     Detail::Mood(sections) => pages::explore(covers, sections, playing),
+                    Detail::Songs(songs) if *route == Route::Downloads => {
+                        downloads::page(covers, songs, &self.downloads, playing)
+                    }
                     Detail::Songs(songs) => pages::songs(covers, route, songs, playing),
                 },
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
@@ -1211,12 +1230,16 @@ impl App {
         };
         let lyrics = toggle(icons::LYRICS, Message::ToggleLyrics, self.showing_lyrics());
         let queue = toggle(icons::QUEUE, Message::ToggleQueue, self.queue_open);
+        let download: Element<'_, Message> = match player.song() {
+            Some(song) => downloads::bar_button(&self.downloads, song),
+            None => Space::new().into(),
+        };
         let content = row![
             container(now_playing).width(Length::FillPortion(1)),
             // Transport takes its own width, so the seek slider gets the rest
             // of a narrow window; equal sides keep it centred.
             transport,
-            row![seek, row![lyrics, queue].spacing(4)]
+            row![seek, row![download, lyrics, queue].spacing(4)]
                 .spacing(14)
                 .align_y(Alignment::Center)
                 .width(Length::FillPortion(1)),
@@ -1363,7 +1386,7 @@ fn account<'a>(covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Mess
 }
 
 /// Dev aid: WOOF_PAGE opens a page over Home at start: `library`, `explore`,
-/// `search`, `album:ID`, `artist:ID`, `playlist:ID` or `podcast:ID`.
+/// `search`, `liked`, `top100`, `downloads`, `album:ID`, `artist:ID`, `playlist:ID` or `podcast:ID`.
 fn dev_route() -> Option<Route> {
     let page = std::env::var("WOOF_PAGE").ok()?;
     match page.split_once(':') {
@@ -1375,6 +1398,7 @@ fn dev_route() -> Option<Route> {
             "library" => Some(Route::Library),
             "liked" => Some(Route::LikedSongs),
             "top100" => Some(Route::TopSongs),
+            "downloads" => Some(Route::Downloads),
             "explore" => Some(Route::Explore),
             "search" => Some(Route::Search),
             _ => None,

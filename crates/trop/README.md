@@ -84,3 +84,7 @@ Integrations translated: `LastFM/` (service, integration, defaults, token store,
 ## Tests
 
 `cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`. `scrobbling_test.rs` and `odesli_test.rs` run Last.fm, ListenBrainz and Odesli on `crates/fixtures/{last_fm,listen_brainz,odesli}/` with keyring-core's mock store. `lyrics_romanizer_test.rs` has no Swift or Dart counterpart: its expected outputs are traced from the Swift rules, and standard Hanyu Pinyin for Chinese. `lyrics_test.rs` ports `LyricsParsing.selfCheck` and runs each provider on `crates/fixtures/lyrics/` through a mock `Session`.
+| `DownloadManager` (`@MainActor ObservableObject`, `@Published` state) | `DownloadManager` behind a `Mutex`; the app reads `downloads()` on a timer while a download runs |
+| `DownloadManager` ffmpeg download, AAC remux, Opus→AAC transcode, embedded cover | one `reqwest` GET per 10 MB `Range` piece; the stream is saved as sent (`.m4a` or `.webm`), mpv plays both |
+| `DownloadManager.reload` orphan adoption, Wi-Fi Only, batch progress | not ported; `tracks()` drops rows whose file is gone |
+| `DownloadedCollections` (album and playlist download badges) | not ported (no screen shows them) |
