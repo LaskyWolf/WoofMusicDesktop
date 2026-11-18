@@ -103,3 +103,40 @@ fn parse_suggestions_reads_the_text_suggestions() {
     assert!(suggestions.iter().all(|s| s.starts_with("daft p")));
     assert!(SearchService::parse_suggestions(b"not json").is_empty());
 }
+
+#[test]
+fn search_playlist_author_is_the_owner_not_the_kind_word() {
+    let sections = sections();
+    let playlists = &named(&sections, "Playlists").items;
+    for item in playlists {
+        let YTItem::Playlist(playlist) = item else {
+            panic!("not a playlist: {item:?}");
+        };
+        assert_ne!(
+            playlist.author.as_deref(),
+            Some("Playlist"),
+            "{}",
+            playlist.title
+        );
+    }
+    // Row byline: "Playlist • Christian Isbej • 687 views".
+    assert!(playlists.iter().any(|p| matches!(p,
+        YTItem::Playlist(p) if p.author.as_deref() == Some("Christian Isbej"))));
+}
+
+#[test]
+fn top_result_playlist_id_loses_only_the_vl_prefix() {
+    let response = serde_json::json!({ "contents": { "sectionListRenderer": { "contents": [
+        { "musicCardShelfRenderer": {
+            "title": { "runs": [{ "text": "Mix" }] },
+            "onTap": { "browseEndpoint": {
+                "browseId": "VLPLabcVLdef",
+                "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_PLAYLIST" }
+                }
+            }}
+        }}
+    ]}}});
+    let sections = SearchParser::parse_search_results(response.as_object().unwrap());
+    assert_eq!(sections[0].items[0].id(), "PLabcVLdef");
+}

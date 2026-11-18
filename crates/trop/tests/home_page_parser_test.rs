@@ -274,3 +274,45 @@ fn artist_credits_drop_separators_counts_and_durations_and_keep_channel_ids() {
     );
     assert_eq!(ArtistCredits::cleaned_name("Queen (1973)"), "Queen");
 }
+
+#[test]
+fn home_playlist_card_author_is_not_the_kind_word() {
+    let home = HomePageParser::parse_home_page(&fixture("home")).unwrap();
+    let section = home
+        .sections
+        .iter()
+        .find(|s| s.title == "Featured playlists for you")
+        .unwrap();
+    let YTItem::Playlist(playlist) = &section.items[0] else {
+        panic!("not a playlist");
+    };
+    // Card subtitle: "Chart • YouTube Charts".
+    assert_eq!(playlist.author.as_deref(), Some("YouTube Charts"));
+}
+
+#[test]
+fn home_album_card_reads_its_artist_from_the_subtitle() {
+    let home = HomePageParser::parse_home_page(&fixture("home")).unwrap();
+    let section = home
+        .sections
+        .iter()
+        .find(|s| s.title == "New releases")
+        .unwrap();
+    let YTItem::Album(album) = &section.items[0] else {
+        panic!("not an album");
+    };
+    // Card subtitle: "Single • Jervis Campbell".
+    let names: Vec<&str> = album.artists.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Jervis Campbell"]);
+}
+
+#[test]
+fn explicit_badge_marks_album_cards_explicit() {
+    let home = HomePageParser::parse_home_page(&fixture("home")).unwrap();
+    assert!(
+        home.sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .any(|i| matches!(i, YTItem::Album(a) if a.is_explicit))
+    );
+}

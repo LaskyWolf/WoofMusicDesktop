@@ -348,6 +348,9 @@ struct Player {
     /// When each song last failed to load, so a second failure stops instead
     /// of retrying forever.
     failures: HashMap<String, Instant>,
+    /// The song `plays` counts. Its play time is saved after the queue may
+    /// already hold other songs, so the row is named from here.
+    tracked: Option<SongItem>,
 }
 
 impl Player {
@@ -416,8 +419,10 @@ pub enum Message {
     CookieInput(String),
     ImportCookies,
     SignOut,
-    /// A session was restored, signed in or out (`true`), or sign-in did not finish (`false`).
+    /// The session at start, after sign-out, or once a sign-in finished: signed in or not.
     SessionReady(bool),
+    /// The login window or the pasted cookies answered. Only this ends `SigningIn`.
+    SignInDone(bool),
     Account(Result<AccountInfo, String>),
     Download(downloads::Msg),
     /// The Settings page and the player bar's Copy song link.
@@ -750,7 +755,7 @@ impl App {
             Message::SignIn => {
                 self.session = Session::SigningIn;
                 self.sign_in_error = None;
-                Task::perform(self.services.clone().sign_in(), Message::SessionReady)
+                Task::perform(self.services.clone().sign_in(), Message::SignInDone)
             }
             Message::CookieInput(header) => {
                 self.cookie_header = header;
@@ -768,7 +773,7 @@ impl App {
                     self.services
                         .clone()
                         .import_cookies(self.cookie_header.clone()),
-                    Message::SessionReady,
+                    Message::SignInDone,
                 )
             }
             Message::SignOut => {
@@ -777,14 +782,17 @@ impl App {
                     Message::SessionReady(false)
                 })
             }
-            Message::SessionReady(signed_in) => {
-                if !signed_in && matches!(self.session, Session::SigningIn) {
+            Message::SignInDone(true) => self.update(Message::SessionReady(true)),
+            Message::SignInDone(false) => {
+                if matches!(self.session, Session::SigningIn) {
                     self.session = Session::Guest;
                     self.sign_in_error = Some(
                         "Sign-in did not finish. Try again, or paste a Cookie header that has SAPISID.",
                     );
-                    return Task::none();
                 }
+                Task::none()
+            }
+            Message::SessionReady(signed_in) => {
                 let account = if signed_in {
                     self.session = Session::SignedIn(None);
                     self.cookie_header.clear();
@@ -1000,7 +1008,13 @@ impl App {
                 finished
             }
             Message::Artwork(video_id, artwork) => {
-                if let Some(artwork) = artwork {
+                // A late answer for a skipped song would hide the current one's cover.
+                if let Some(artwork) = artwork
+                    && self
+                        .player
+                        .song()
+                        .is_some_and(|song| song.video_id == video_id)
+                {
                     self.artwork = Some((video_id, artwork));
                 }
                 Task::none()
@@ -1203,13 +1217,7 @@ impl App {
         else {
             return Task::none();
         };
-        let song = self
-            .player
-            .queue
-            .songs
-            .iter()
-            .find(|song| song.video_id == *video_id)
-            .cloned();
+        let song = (self.player.tracked.clone()).filter(|song| song.video_id == *video_id);
         Task::future(self.services.clone().save_plays(song, records)).discard()
     }
 
@@ -1578,6 +1586,7 @@ impl App {
         let finished = self.plays.stop_tracking(Instant::now());
         self.plays.start_tracking(&video_id);
         let saved = self.save_plays(finished);
+        self.player.tracked = self.player.song().cloned();
         self.player.error = None;
         self.player.position = 0.0;
         self.player.duration = 0.0;
@@ -2072,7 +2081,14 @@ impl App {
 /// pauses, Escape closes the queue or Now Playing, Alt+Left goes back.
 fn shortcut(event: keyboard::Event) -> Option<Message> {
     use keyboard::key::Named;
-    let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+    // A held key repeats: Space would flip play and pause on and off.
+    let keyboard::Event::KeyPressed {
+        key,
+        modifiers,
+        repeat: false,
+        ..
+    } = event
+    else {
         return None;
     };
     match key.as_ref() {
@@ -2441,4 +2457,135 @@ mod icons {
 /// Swift `isPodcastEpisode`: its speed and position are kept apart from songs.
 fn is_episode(song: &SongItem) -> bool {
     song.music_video_type.as_deref() == Some("MUSIC_VIDEO_TYPE_PODCAST_EPISODE")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trop::playback::playback_state_service::{PlayRecord, save};
+
+    fn app() -> App {
+        App {
+            services: Services::for_test(),
+            maximized: false,
+            stack: vec![Entry {
+                route: Route::Home,
+                offset: 0.0,
+            }],
+            home: Load::Loading,
+            explore: None,
+            details: HashMap::new(),
+            query: String::new(),
+            searched: String::new(),
+            results: None,
+            covers: HashMap::new(),
+            library: None,
+            library_filter: None,
+            syncing: false,
+            player: Player::default(),
+            now_playing: false,
+            queue_open: false,
+            lyrics_open: false,
+            lyrics: None,
+            queue_list: virtual_list::State::default(),
+            artwork: None,
+            plays: PlaybackStateService::default(),
+            transitions: None,
+            session: Session::Guest,
+            sign_in_error: None,
+            cookie_header: String::new(),
+            downloads: downloads::Downloads::default(),
+            settings: settings::State::default(),
+            menu: None,
+            right_click: Point::ORIGIN,
+            window: WINDOW_SIZE,
+            liked: HashSet::new(),
+            notice: None,
+            defaults: PlayerDefaults::default(),
+            speed: PlaybackSpeed::default(),
+            sleep: SleepTimer::default(),
+            sponsor: SponsorBlock::default(),
+            episodes: EpisodePlaybackStore::default(),
+        }
+    }
+
+    fn song(id: &str) -> SongItem {
+        SongItem {
+            video_id: id.to_owned(),
+            title: format!("Title {id}"),
+            thumbnail_url: Some(format!("https://example.invalid/{id}.jpg")),
+            ..SongItem::default()
+        }
+    }
+
+    fn play(app: &mut App, id: &str) {
+        let _ = app.update(Message::PlayQueue(Arc::new(vec![song(id)]), 0));
+    }
+
+    fn key(named: keyboard::key::Named, repeat: bool) -> keyboard::Event {
+        keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(named),
+            modified_key: keyboard::Key::Named(named),
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::default(),
+            text: None,
+            repeat,
+        }
+    }
+
+    #[test]
+    fn held_space_toggles_play_once() {
+        assert!(shortcut(key(keyboard::key::Named::Space, false)).is_some());
+        assert!(shortcut(key(keyboard::key::Named::Space, true)).is_none());
+    }
+
+    #[test]
+    fn late_artwork_of_a_skipped_song_keeps_the_current_cover() {
+        let mut app = app();
+        play(&mut app, "A");
+        play(&mut app, "B");
+        let artwork = || services::Artwork {
+            image: iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]),
+            colors: [[0.0; 3]; 2],
+        };
+        let _ = app.update(Message::Artwork("B".into(), Some(artwork())));
+        let _ = app.update(Message::Artwork("A".into(), Some(artwork())));
+        assert!(app.current_artwork().is_some());
+    }
+
+    #[test]
+    fn sign_out_finishing_late_keeps_a_new_sign_in_open() {
+        let mut app = app();
+        app.session = Session::SignedIn(None);
+        let _ = app.update(Message::SignOut);
+        let _ = app.update(Message::SignIn);
+        let _ = app.update(Message::SessionReady(false));
+        assert!(matches!(app.session, Session::SigningIn));
+        assert!(app.sign_in_error.is_none());
+        let _ = app.update(Message::SignInDone(false));
+        assert!(matches!(app.session, Session::Guest));
+        assert!(app.sign_in_error.is_some());
+    }
+
+    /// A song played under 5 s banks its play time only when the next song
+    /// starts, after a new list may have replaced the queue.
+    #[test]
+    fn short_play_before_a_queue_switch_saves_the_song_title() {
+        let mut app = app();
+        play(&mut app, "A");
+        let outgoing = app.player.tracked.clone();
+        play(&mut app, "B");
+        assert_eq!(app.player.tracked.as_ref().map(|s| &*s.video_id), Some("B"));
+        let db = &app.services.db;
+        let records = [PlayRecord::PlayTime {
+            video_id: "A".into(),
+            ms: 3000,
+        }];
+        save(db, outgoing.as_ref(), &records).unwrap();
+        let top = db.fetch_top_songs(100).unwrap();
+        assert_eq!(top[0].title, "Title A");
+    }
 }

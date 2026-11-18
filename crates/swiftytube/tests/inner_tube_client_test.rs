@@ -275,3 +275,22 @@ async fn browse_returns_the_home_fixture_tabs() {
     assert_eq!(tabs[0].browse_id.as_deref(), Some("FEmusic_home"));
     assert!(tabs[0].selected);
 }
+
+#[tokio::test]
+async fn playlist_edits_are_sent_once_even_after_a_server_error() {
+    let (client, sent) = make_client(AuthState::guest(), b"{}".to_vec(), 503);
+    let add = vec![
+        json!({ "action": "ACTION_ADD_VIDEO", "addedVideoId": "abcdefghijk" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    ];
+    assert!(client.edit_playlist("PLx", add, None, None).await.is_err());
+    assert!(
+        client
+            .create_playlist("Mix", None, None, None)
+            .await
+            .is_err()
+    );
+    assert_eq!(sent.lock().unwrap().len(), 2);
+}

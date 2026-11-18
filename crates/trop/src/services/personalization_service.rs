@@ -10,7 +10,7 @@ use swiftytube::networking::inner_tube_json::InnerTubeJSON;
 use swiftytube::streaming::video_availability::VideoAvailability;
 use swiftytube::sync::artist_credits::ArtistCredits;
 
-use crate::networking::models::yt_item::{SongItem, YTArtist};
+use crate::networking::models::yt_item::{SongItem, YTArtist, has_explicit_badge};
 
 /// Swift caps each panel at 50 songs.
 const PANEL_LIMIT: usize = 50;
@@ -199,15 +199,4 @@ fn panel_song(renderer: &JsonDict) -> Option<SongItem> {
         music_video_type: VideoAvailability::row_music_video_type(renderer),
         ..SongItem::default()
     })
-}
-
-fn has_explicit_badge(renderer: &JsonDict) -> bool {
-    as_dict_list(renderer.get("badges"))
-        .unwrap_or_default()
-        .iter()
-        .any(|badge| {
-            let icon =
-                as_dict(badge.get("musicInlineBadgeRenderer")).and_then(|b| as_dict(b.get("icon")));
-            icon.and_then(|i| as_string(i.get("iconType"))) == Some("MUSIC_EXPLICIT_BADGE")
-        })
 }

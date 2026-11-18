@@ -230,19 +230,48 @@ fn lrc_timestamps_with_two_or_three_digit_fractions_or_none() {
 }
 
 #[test]
-fn lrc_multi_time_line_is_one_line_at_its_last_time() {
-    let lines = LyricsParsing::parse_lrc("[00:01.00][00:05.00]Chorus");
-    assert_eq!(texts(&lines), ["Chorus"]);
-    assert_eq!(lines[0].start_time, Some(5.0));
+fn lrc_with_byte_order_mark_keeps_first_line() {
+    let lines = LyricsParsing::parse_lrc("\u{FEFF}[00:01.00]hello\n[00:02.00]world");
+    assert_eq!(texts(&lines), ["hello", "world"]);
 }
 
 #[test]
-fn lrc_metadata_tags_are_skipped_and_offset_is_not_applied() {
+fn lyrics_past_100_minutes_round_trip() {
+    let mut lines = LyricsParsing::parse_lrc("[99:59.00]a");
+    lines[0].start_time = Some(6000.0 + 5.0);
+    let raw = LyricsParsing::serialize_lines(&lines);
+    assert_eq!(raw, "[100:05.00]a");
+    let back = LyricsParsing::parse_stored_text(&raw);
+    assert_eq!(back[0].start_time, Some(6005.0));
+}
+
+#[test]
+fn compressed_lrc_line_shows_at_every_timestamp() {
+    let lines = LyricsParsing::parse_lrc("[00:10.00][01:20.00]Chorus\n[00:20.00]Verse [00:99]");
+    assert_eq!(texts(&lines), ["Chorus", "Verse [00:99]", "Chorus"]);
+    let times: Vec<f64> = lines.iter().map(|l| l.start_time.unwrap()).collect();
+    assert_eq!(times, [10.0, 20.0, 80.0]);
+    assert_ne!(lines[0].id, lines[2].id);
+}
+
+#[test]
+fn out_of_order_lrc_lines_are_sorted_by_time() {
+    let lines = LyricsParsing::parse_lrc("[00:20.00]second\n[00:10.00]first\n[00:30.00]third");
+    assert_eq!(texts(&lines), ["first", "second", "third"]);
+    assert_eq!(lines[active_line_index(&lines, 15.0)].text, "first");
+}
+
+#[test]
+fn lrc_metadata_tags_are_skipped_and_offset_shows_lyrics_earlier() {
     let lines = LyricsParsing::parse_lrc(
-        "[ar:Sample Artist]\n[ti:Sample Song]\n[offset:+500]\n[00:10.00]Line",
+        "[ar:Sample Artist]\n[ti:Sample Song]\n[offset:+500]\n[00:00.20]Intro\n[00:10.00]<00:10.00>Line",
     );
-    assert_eq!(texts(&lines), ["Line"]);
-    assert_eq!(lines[0].start_time, Some(10.0));
+    assert_eq!(texts(&lines), ["Intro", "Line"]);
+    assert_eq!(lines[0].start_time, Some(0.0));
+    assert_eq!(lines[1].start_time, Some(9.5));
+    assert_eq!(lines[1].words.as_ref().unwrap()[0].start_time, 9.5);
+    let later = LyricsParsing::parse_lrc("[offset:-250]\n[00:10.00]Line");
+    assert_eq!(later[0].start_time, Some(10.25));
 }
 
 #[test]
@@ -263,6 +292,18 @@ fn stored_text_falls_back_to_plain_lines_and_round_trips() {
         "[00:01.50]First\n[01:04.00]Second"
     );
     assert_eq!(LyricsParsing::plain_text(&synced), "First\nSecond");
+}
+
+#[test]
+fn untimed_line_in_saved_lrc_keeps_its_place() {
+    let raw = "[ar:Sample Artist]\n[00:03.00]three\n[00:01.00]one\nadded line\n[00:02.00]two";
+    let lines = LyricsParsing::parse_stored_text(raw);
+    assert_eq!(texts(&lines), ["one", "added line", "two", "three"]);
+    assert_eq!(lines[1].start_time, None);
+    assert_eq!(
+        LyricsParsing::serialize_lines(&lines),
+        "[00:01.00]one\nadded line\n[00:02.00]two\n[00:03.00]three"
+    );
 }
 
 // Providers, over a mock session.
@@ -759,6 +800,35 @@ fn query_cleaning_splits_channel_uploads_and_strips_extras() {
         }),
         None
     );
+}
+
+#[test]
+fn query_matches_channel_words_only_as_whole_words() {
+    let query = |title: &str, artist: &str| {
+        let q = LyricsService::resolve_query(&LyricsSong {
+            title: title.into(),
+            artist: artist.into(),
+            ..song()
+        })
+        .unwrap();
+        (q.title, q.artist)
+    };
+    let pair = |title: &str, artist: &str| (title.to_string(), artist.to_string());
+    assert_eq!(
+        query("Officially Missing You", "Tamia"),
+        pair("Officially Missing You", "Tamia")
+    );
+    assert_eq!(
+        query("Paranoid Android - Remastered", "Radiohead"),
+        pair("Paranoid Android - Remastered", "Radiohead")
+    );
+    assert_eq!(
+        query("Feel It Still - Lido Remix", "Portugal. The Man"),
+        pair("Feel It Still - Lido Remix", "Portugal. The Man")
+    );
+    assert_eq!(query("Breaking Me", "Topic"), pair("Breaking Me", "Topic"));
+    assert_eq!(query("Adele - Hello", "AdeleVEVO"), pair("Hello", "Adele"));
+    assert_eq!(query("Hello", "Adele-Topic"), pair("Hello", "Adele"));
 }
 
 // Line lookup.

@@ -44,12 +44,17 @@ pub trait LyricsProvider: Send + Sync {
 
 /// One or more leading [..] tags.
 static LEADING_TAGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\])+").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:\[(\d+):(\d{1,2})(?:\.(\d{1,3}))?\])+").unwrap());
 static TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[(\d+):(\d{1,2})(?:\.(\d{1,3}))?\]").unwrap());
 /// Enhanced LRC word tag: `<mm:ss.xx>`.
 static WORD_TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?>").unwrap());
+    LazyLock::new(|| Regex::new(r"<(\d+):(\d{1,2})(?:\.(\d{1,3}))?>").unwrap());
+/// LRC `[offset:±ms]` header.
+static OFFSET_TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\[offset:\s*([+-]?\d+)\s*\]").unwrap());
+/// LRC metadata line such as `[ar:Artist]` or `[offset:+500]`.
+static METADATA_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[[A-Za-z]+:.*\]$").unwrap());
 /// Netease klyric / yrc and Kugou KRC line start `[startMs,durationMs]`.
 static KLYRIC_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[(\d+),\d+\]").unwrap());
 /// Netease klyric word tag `(x,durationMs)`.
@@ -80,8 +85,10 @@ const KRC_KEY: [u8; 16] = [
     64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105,
 ];
 
-/// Splits on `\n` and `\r`, dropping empty pieces (Swift `split(whereSeparator: \.isNewline)`).
+/// Splits on `\n` and `\r`, dropping empty pieces (Swift `split(whereSeparator: \.isNewline)`)
+/// and a leading byte order mark, which would hide the first line's tag.
 fn split_lines(raw: &str) -> impl Iterator<Item = &str> {
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
     raw.split(['\n', '\r']).filter(|line| !line.is_empty())
 }
 
@@ -103,29 +110,65 @@ impl LyricsParsing {
         (int(1) * 60 + int(2)) as f64 + frac
     }
 
-    /// Parses an `[mm:ss.xx]` or `[mm:ss]` timestamp at the start of a line.
-    /// The time is the last tag anywhere in the line, so `[00:01][00:05]x` is one line at 5 s.
-    pub fn parse_lrc_timestamp(line: &str) -> Option<(f64, String)> {
+    /// Parses the `[mm:ss.xx]` or `[mm:ss]` timestamps at the start of a line.
+    /// Compressed LRC gives one text several times: `[00:10][01:20]x` is shown at 10 s and 80 s.
+    pub fn parse_lrc_timestamps(line: &str) -> Option<(Vec<f64>, String)> {
         let lead = LEADING_TAGS.find(line)?;
-        let last = TAG.captures_iter(line).last()?;
-        Some((
-            Self::tag_seconds(&last),
-            line[lead.end()..].trim().to_string(),
-        ))
+        let times = TAG
+            .captures_iter(lead.as_str())
+            .map(|tag| Self::tag_seconds(&tag))
+            .collect();
+        Some((times, line[lead.end()..].trim().to_string()))
     }
 
-    /// Split a raw LRC string into lines. Blank timestamped lines are kept:
-    /// they mark instrumental spans.
+    /// Split a raw LRC string into lines sorted by time. Blank timestamped
+    /// lines are kept: they mark instrumental spans.
     pub fn parse_lrc(raw: &str) -> Vec<LyricLine> {
-        split_lines(raw)
-            .filter_map(|line| {
-                let (time, text) = Self::parse_lrc_timestamp(line)?;
-                Some(match Self::parse_word_tags(&text) {
-                    None => LyricLine::new(text, Some(time)),
-                    Some((plain, words)) => LyricLine::with_words(plain, Some(time), words),
-                })
-            })
-            .collect()
+        Self::parse_lrc_lines(raw, false)
+    }
+
+    /// `keep_untimed` keeps lines without a timestamp, except metadata tags
+    /// like `[ar:Artist]`; each stays right after the line before it.
+    fn parse_lrc_lines(raw: &str, keep_untimed: bool) -> Vec<LyricLine> {
+        let mut keyed: Vec<(f64, LyricLine)> = Vec::new();
+        for line in split_lines(raw) {
+            let Some((times, text)) = Self::parse_lrc_timestamps(line) else {
+                let text = line.trim();
+                if keep_untimed && !text.is_empty() && !METADATA_TAG.is_match(text) {
+                    let key = keyed.last().map_or(f64::NEG_INFINITY, |(key, _)| *key);
+                    keyed.push((key, LyricLine::new(text, None)));
+                }
+                continue;
+            };
+            let parsed = Self::parse_word_tags(&text);
+            for time in times {
+                let line = match &parsed {
+                    None => LyricLine::new(text.clone(), Some(time)),
+                    Some((plain, words)) => {
+                        LyricLine::with_words(plain.clone(), Some(time), words.clone())
+                    }
+                };
+                keyed.push((time, line));
+            }
+        }
+        keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut lines: Vec<LyricLine> = keyed.into_iter().map(|(_, line)| line).collect();
+        // `[offset:+500]` in ms: a positive offset shows the lyrics earlier.
+        let offset = split_lines(raw)
+            .find_map(|line| OFFSET_TAG.captures(line.trim()))
+            .and_then(|tag| tag[1].parse::<f64>().ok())
+            .map_or(0.0, |ms| ms / 1000.0);
+        if offset != 0.0 {
+            let shift = |t: f64| (t - offset).max(0.0);
+            for line in &mut lines {
+                line.start_time = line.start_time.map(shift);
+                for word in line.words.iter_mut().flatten() {
+                    word.start_time = shift(word.start_time);
+                    word.end_time = word.end_time.map(shift);
+                }
+            }
+        }
+        lines
     }
 
     /// Enhanced LRC word tags: `<00:12.00>Never <00:12.50>gonna<00:13.25>`.
@@ -337,9 +380,10 @@ impl LyricsParsing {
     }
 
     /// Parses stored lyrics text: LRC if timestamped, otherwise plain lines.
+    /// Untimed lines in LRC text, such as a line added in the editor, are kept.
     pub fn parse_stored_text(raw: &str) -> Vec<LyricLine> {
-        let lrc = Self::parse_lrc(raw);
-        if !lrc.is_empty() {
+        let lrc = Self::parse_lrc_lines(raw, true);
+        if lrc.iter().any(|line| line.start_time.is_some()) {
             return lrc;
         }
         split_lines(raw)

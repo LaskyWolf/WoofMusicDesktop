@@ -234,7 +234,10 @@ impl SearchParser {
         };
         let playlist = |browse_id: String, title: String, thumbnail_url: Option<String>| {
             YTItem::Playlist(PlaylistItem {
-                id: browse_id.replace("VL", ""),
+                id: browse_id
+                    .strip_prefix("VL")
+                    .unwrap_or(&browse_id)
+                    .to_string(),
                 title,
                 thumbnail_url,
                 ..PlaylistItem::default()

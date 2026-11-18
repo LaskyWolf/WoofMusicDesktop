@@ -17,6 +17,7 @@ use swiftytube::sync::library_sync_models::{
 };
 use swiftytube::sync::library_sync_service::LibrarySyncService;
 use swiftytube::sync::library_sync_store::LibrarySyncStore;
+use swiftytube::sync::mutation_service::MutationService;
 use trop::database::database_service::DatabaseService;
 use trop::database::entities::song_entity::SongEntity;
 use trop::services::library_pages::LibraryPages;
@@ -374,6 +375,60 @@ fn save_song_keeps_the_stored_unavailable_flag() {
     let stored: SongEntity = db.fetch_one("gone0000001").unwrap().unwrap();
     assert_eq!(stored.title, "Updated");
     assert!(stored.is_unavailable);
+}
+
+#[test]
+fn save_song_keeps_play_time_banked_after_the_song_was_read() {
+    let (store, db) = store();
+    store
+        .save_song(&SyncSong::skeleton("play0000001", false, ""))
+        .unwrap();
+
+    let mut read_before = store.fetch_song("play0000001").unwrap().unwrap();
+    db.increment_total_play_time("play0000001", 120_000)
+        .unwrap();
+    read_before.liked = true;
+    store.save_song(&read_before).unwrap();
+
+    let stored: SongEntity = db.fetch_one("play0000001").unwrap().unwrap();
+    assert!(stored.liked);
+    assert_eq!(stored.total_play_time, 120_000);
+}
+
+#[tokio::test]
+async fn failed_like_rollback_keeps_play_time_banked_during_the_request() {
+    let (store, db) = store();
+    let store = Arc::new(store);
+    store
+        .save_song(&SyncSong::skeleton("play0000002", false, ""))
+        .unwrap();
+    let playback = db.clone();
+    let banked = std::sync::Once::new();
+    let session = Session::mock(move |_| {
+        // The song keeps playing while the like request is in flight
+        // (banked once: the client retries a 500).
+        banked.call_once(|| {
+            playback
+                .increment_total_play_time("play0000002", 120_000)
+                .unwrap();
+        });
+        HttpResponse {
+            status: 500,
+            ..HttpResponse::default()
+        }
+    });
+    let client = Arc::new(InnerTubeClient::with_session(
+        SwiftyTubeConfig::music(),
+        AuthState::guest(),
+        session,
+    ));
+    let _ = MutationService::new(client, store)
+        .like_song("play0000002")
+        .await;
+
+    let stored: SongEntity = db.fetch_one("play0000002").unwrap().unwrap();
+    assert!(!stored.liked);
+    assert_eq!(stored.total_play_time, 120_000);
 }
 
 // MARK: - LibraryPages

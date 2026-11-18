@@ -167,3 +167,15 @@ fn artist_description_from_the_about_shelf() {
             .starts_with("Daft Punk were a French electronic music duo")
     );
 }
+
+#[test]
+fn artist_page_album_card_reads_its_year_from_the_subtitle() {
+    let artist = ArtistDetailParser::parse_artist_detail(&fixture("artist"), "UCtest");
+    let album = artist
+        .albums
+        .iter()
+        .find(|a| a.title == "Random Access Memories")
+        .unwrap();
+    // Card subtitle: "2013".
+    assert_eq!(album.year, Some(2013));
+}

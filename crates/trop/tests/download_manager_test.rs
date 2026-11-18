@@ -1,11 +1,12 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use trop::database::database_service::DatabaseService;
 use trop::database::entities::downloaded_track_entity::DownloadedTrackEntity;
 use trop::networking::models::yt_item::{SongItem, YTArtist};
-use trop::services::download_manager::{DownloadManager, Resolved};
+use trop::services::download_manager::{DownloadManager, DownloadState, Resolved};
 
 #[test]
 fn file_names_follow_swift() {
@@ -121,5 +122,79 @@ async fn download_records_the_row_and_delete_removes_it() {
     manager.delete("vid_123456").unwrap();
     assert!(!path.exists());
     assert!(manager.local_path("vid_123456").is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// One HTTP 200 answer: the first half of `len` bytes, the rest once `rest` fires.
+fn serve_in_two_halves(len: usize) -> (String, mpsc::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    let (rest, wait) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 2048];
+        let _ = stream.read(&mut request);
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n");
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&vec![7; len / 2]).unwrap();
+        let _ = wait.recv();
+        let _ = stream.write_all(&vec![7; len - len / 2]);
+    });
+    (url, rest)
+}
+
+/// Waits until the download of `video_id` has saved some bytes.
+async fn wait_for_bytes(manager: &DownloadManager, video_id: &str) {
+    for _ in 0..500 {
+        let saving = manager.downloads().iter().any(|d| {
+            d.song.video_id == video_id
+                && matches!(d.state, DownloadState::Downloading(p) if p > 0.05)
+        });
+        if saving {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{video_id} saved nothing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn download_again_after_cancel_survives_the_cancelled_run() {
+    let dir = std::env::temp_dir().join(format!("woof-downloads-retry-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let manager = Arc::new(DownloadManager::new(
+        Arc::new(DatabaseService::open_in_memory()),
+        dir.clone(),
+    ));
+    let song = SongItem {
+        video_id: "vid_retry01".into(),
+        title: "Song".into(),
+        duration: 180,
+        ..SongItem::default()
+    };
+    let start = |url: String| {
+        let (manager, song) = (manager.clone(), song.clone());
+        tokio::spawn(async move {
+            manager
+                .download(song, async { Ok(resolved(url, "audio/webm")) })
+                .await
+        })
+    };
+
+    let (url, first_rest) = serve_in_two_halves(200_000);
+    let first = start(url);
+    wait_for_bytes(&manager, "vid_retry01").await;
+    manager.cancel("vid_retry01");
+    let (url, second_rest) = serve_in_two_halves(200_000);
+    let second = start(url);
+    wait_for_bytes(&manager, "vid_retry01").await;
+
+    // The cancelled run gets more bytes, stops and cleans up its own file.
+    first_rest.send(()).unwrap();
+    assert_eq!(first.await.unwrap(), Ok(false));
+    second_rest.send(()).unwrap();
+    assert_eq!(second.await.unwrap(), Ok(true));
+    let path = manager.local_path("vid_retry01").unwrap();
+    assert_eq!(std::fs::metadata(path).unwrap().len(), 200_000);
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -44,6 +44,15 @@ fn credits_to_artists(runs: &[&JsonDict]) -> Vec<YTArtist> {
         .collect()
 }
 
+/// First credited name of a playlist byline ("Playlist • Owner • 687 views");
+/// the kind word and the counts are not names.
+fn playlist_author(runs: &[&JsonDict]) -> Option<String> {
+    ArtistCredits::parse(runs)
+        .into_iter()
+        .next()
+        .map(|c| c.name)
+}
+
 /// Bare 4-digit release year segment.
 fn parse_year(text: &str) -> Option<i64> {
     let trimmed = text.trim();
@@ -223,7 +232,7 @@ impl YTItem {
                     year,
                     thumbnail_url,
                     playlist_id: extract_playlist_id(renderer).map(str::to_string),
-                    is_explicit: false,
+                    is_explicit: has_explicit_badge(renderer),
                 }))
             }
             Some("MUSIC_PAGE_TYPE_ARTIST") => Some(YTItem::Artist(ArtistItem {
@@ -232,16 +241,13 @@ impl YTItem {
                 thumbnail_url,
                 is_subscribed: false,
             })),
-            Some("MUSIC_PAGE_TYPE_PLAYLIST") => {
-                let segments = split_runs_by_separator(&flex_text_runs(&flex_columns, 1));
-                Some(YTItem::Playlist(PlaylistItem {
-                    id: browse_id,
-                    title,
-                    author: segments.first().map(|seg| seg.join(" ")),
-                    thumbnail_url,
-                    song_count: None,
-                }))
-            }
+            Some("MUSIC_PAGE_TYPE_PLAYLIST") => Some(YTItem::Playlist(PlaylistItem {
+                id: browse_id,
+                title,
+                author: playlist_author(&flex_text_runs(&flex_columns, 1)),
+                thumbnail_url,
+                song_count: None,
+            })),
             Some("MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE") => {
                 Some(YTItem::Podcast(PodcastItem {
                     browse_id,
@@ -429,34 +435,7 @@ impl SongItem {
             .map(|t| t.trim().to_string());
         let album_id = album_run.map(|(_, id)| id.to_string());
 
-        let artists = if segments.is_empty() {
-            Vec::new()
-        } else {
-            let credits = ArtistCredits::parse(&runs);
-            let to_artist = |raw: &String| {
-                let name = ArtistCredits::cleaned_name(raw);
-                let id = credits
-                    .iter()
-                    .find(|c| c.name == name)
-                    .and_then(|c| c.browse_id.clone());
-                YTArtist { name, id }
-            };
-            let artist_segments: Vec<&Vec<String>> = segments
-                .iter()
-                .skip_while(|seg| seg.iter().all(|t| !ArtistCredits::is_artist_name(t)))
-                .collect();
-            let chosen: Vec<&Vec<String>> = if artist_segments.is_empty() {
-                vec![&segments[0]]
-            } else {
-                artist_segments
-            };
-            chosen
-                .into_iter()
-                .flatten()
-                .filter(|t| ArtistCredits::is_artist_name(t))
-                .map(to_artist)
-                .collect()
-        };
+        let artists = credits_to_artists(&runs);
         let stats = extract_item_stats(&segments);
         SongItem {
             video_id,
@@ -470,6 +449,7 @@ impl SongItem {
             view_count: stats.view_count,
             year: stats.year,
             is_video: stats.starts_with_video.then_some(true),
+            is_explicit: has_explicit_badge(renderer),
             music_video_type: VideoAvailability::row_music_video_type(renderer),
             ..SongItem::default()
         }
@@ -535,6 +515,7 @@ impl SongItem {
             view_count: stats.view_count,
             year: stats.year,
             is_video: stats.starts_with_video.then_some(true),
+            is_explicit: has_explicit_badge(renderer),
             music_video_type: VideoAvailability::row_music_video_type(renderer),
             ..SongItem::default()
         }
@@ -559,13 +540,20 @@ impl AlbumItem {
             .map(|id| format!("https://music.youtube.com/playlist?list={id}"))
     }
 
+    /// Card subtitle: "Album • Artist • 2026", "Single • Artist" or "2013".
     pub fn from(renderer: &JsonDict) -> Option<AlbumItem> {
+        let runs = InnerTubeDecode::array(&["subtitle", "runs"], renderer).unwrap_or_default();
         Some(AlbumItem {
             browse_id: extract_two_row_browse_id(renderer)?.to_string(),
             title: two_row_title(renderer),
+            artists: credits_to_artists(&runs),
+            year: runs
+                .iter()
+                .filter_map(|run| as_string(run.get("text")))
+                .find_map(parse_year),
             thumbnail_url: extract_two_row_thumbnail(renderer),
             playlist_id: extract_playlist_id(renderer).map(str::to_string),
-            ..AlbumItem::default()
+            is_explicit: has_explicit_badge(renderer),
         })
     }
 }
@@ -611,9 +599,9 @@ impl PlaylistItem {
         Some(PlaylistItem {
             id: extract_two_row_browse_id(renderer)?.to_string(),
             title: two_row_title(renderer),
-            author: InnerTubeJSON::runs_texts(as_dict(renderer.get("subtitle")))
-                .into_iter()
-                .next(),
+            author: playlist_author(
+                &InnerTubeDecode::array(&["subtitle", "runs"], renderer).unwrap_or_default(),
+            ),
             thumbnail_url: extract_two_row_thumbnail(renderer),
             song_count: None,
         })
@@ -725,6 +713,17 @@ impl EpisodeItem {
 }
 
 // MARK: - Extract Helpers
+
+/// True when the row's badges (cards: `subtitleBadges`) carry the explicit icon.
+pub(crate) fn has_explicit_badge(renderer: &JsonDict) -> bool {
+    ["badges", "subtitleBadges"]
+        .into_iter()
+        .flat_map(|key| as_dict_list(renderer.get(key)).unwrap_or_default())
+        .any(|badge| {
+            InnerTubeDecode::string(&["musicInlineBadgeRenderer", "icon", "iconType"], badge)
+                == Some("MUSIC_EXPLICIT_BADGE")
+        })
+}
 
 fn two_row_title(renderer: &JsonDict) -> String {
     InnerTubeJSON::runs_text(as_dict(renderer.get("title")))

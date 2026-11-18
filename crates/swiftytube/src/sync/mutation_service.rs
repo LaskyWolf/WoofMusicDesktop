@@ -163,7 +163,8 @@ impl MutationService {
     }
 
     pub async fn like_song(&self, video_id: &str) -> Result<(), SyncError> {
-        let mut song = self.stored_or_enriched(video_id, false, "").await?;
+        let original = self.stored_or_enriched(video_id, false, "").await?;
+        let mut song = original.clone();
         song.liked = true;
         song.modify_date = SystemTime::now();
         self.store.save_song(&song)?;
@@ -173,16 +174,15 @@ impl MutationService {
                 Ok(())
             },
             async {
-                let mut restored = song.clone();
-                restored.liked = false;
-                let _ = self.store.save_song(&restored);
+                let _ = self.store.save_song(&original);
             },
         )
         .await
     }
 
     pub async fn unlike_song(&self, video_id: &str) -> Result<(), SyncError> {
-        let mut song = self.stored_or_enriched(video_id, true, "").await?;
+        let original = self.stored_or_enriched(video_id, true, "").await?;
+        let mut song = original.clone();
         song.liked = false;
         song.modify_date = SystemTime::now();
         self.store.save_song(&song)?;
@@ -192,16 +192,15 @@ impl MutationService {
                 Ok(())
             },
             async {
-                let mut restored = song.clone();
-                restored.liked = true;
-                let _ = self.store.save_song(&restored);
+                let _ = self.store.save_song(&original);
             },
         )
         .await
     }
 
     pub async fn add_to_library(&self, video_id: &str, add_token: &str) -> Result<(), SyncError> {
-        let mut song = self.stored_or_enriched(video_id, false, add_token).await?;
+        let original = self.stored_or_enriched(video_id, false, add_token).await?;
+        let mut song = original.clone();
         song.in_library = song.in_library.or(Some(SystemTime::now()));
         song.modify_date = SystemTime::now();
         self.store.save_song(&song)?;
@@ -216,9 +215,7 @@ impl MutationService {
                 Ok(())
             },
             async {
-                let mut restored = song.clone();
-                restored.in_library = None;
-                let _ = self.store.save_song(&restored);
+                let _ = self.store.save_song(&original);
             },
         )
         .await
@@ -229,11 +226,11 @@ impl MutationService {
         video_id: &str,
         remove_token: &str,
     ) -> Result<(), SyncError> {
-        let mut applied = self.store.fetch_song(video_id)?;
-        if let Some(existing) = &mut applied {
+        let original = self.store.fetch_song(video_id)?;
+        if let Some(mut existing) = original.clone() {
             existing.in_library = None;
             existing.modify_date = SystemTime::now();
-            self.store.save_song(existing)?;
+            self.store.save_song(&existing)?;
         }
         if remove_token.is_empty() {
             return Ok(());
@@ -246,10 +243,8 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Some(mut restored) = applied.clone() {
-                    restored.in_library = Some(SystemTime::now());
-                    restored.modify_date = SystemTime::now();
-                    let _ = self.store.save_song(&restored);
+                if let Some(original) = &original {
+                    let _ = self.store.save_song(original);
                 }
             },
         )
@@ -273,6 +268,8 @@ impl MutationService {
         set_video_id: Option<&str>,
     ) -> Result<(), SyncError> {
         let is_local = self.is_local_playlist(playlist_id);
+        // A song already in the playlist keeps its entry when the remote add fails.
+        let existed = self.store.fetch_map_entry(playlist_id, song_id)?.is_some();
         self.store
             .insert_map_ignoring_conflicts(&SyncPlaylistEntry {
                 playlist_id: playlist_id.to_string(),
@@ -295,7 +292,9 @@ impl MutationService {
                 Ok(())
             },
             async {
-                let _ = self.store.delete_map_entry(playlist_id, song_id);
+                if !existed {
+                    let _ = self.store.delete_map_entry(playlist_id, song_id);
+                }
             },
         )
         .await
@@ -379,11 +378,11 @@ impl MutationService {
         channel_id: &str,
         artist_id: &str,
     ) -> Result<(), SyncError> {
-        let mut applied = self.store.fetch_artist(artist_id)?;
-        if let Some(existing) = &mut applied {
+        let original = self.store.fetch_artist(artist_id)?;
+        if let Some(mut existing) = original.clone() {
             existing.bookmarked_at = Some(SystemTime::now());
             existing.channel_id = Some(channel_id.to_string());
-            self.store.save_artist(existing)?;
+            self.store.save_artist(&existing)?;
         }
         OptimisticMutation::attempting_remote(
             async {
@@ -391,10 +390,8 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Some(mut restored) = applied.clone() {
-                    restored.bookmarked_at = None;
-                    restored.channel_id = None;
-                    let _ = self.store.save_artist(&restored);
+                if let Some(original) = &original {
+                    let _ = self.store.save_artist(original);
                 }
             },
         )
@@ -406,10 +403,10 @@ impl MutationService {
         channel_id: &str,
         artist_id: &str,
     ) -> Result<(), SyncError> {
-        let mut applied = self.store.fetch_artist(artist_id)?;
-        if let Some(existing) = &mut applied {
+        let original = self.store.fetch_artist(artist_id)?;
+        if let Some(mut existing) = original.clone() {
             existing.bookmarked_at = None;
-            self.store.save_artist(existing)?;
+            self.store.save_artist(&existing)?;
         }
         OptimisticMutation::attempting_remote(
             async {
@@ -417,9 +414,8 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Some(mut restored) = applied.clone() {
-                    restored.bookmarked_at = restored.bookmarked_at.or(Some(SystemTime::now()));
-                    let _ = self.store.save_artist(&restored);
+                if let Some(original) = &original {
+                    let _ = self.store.save_artist(original);
                 }
             },
         )
@@ -450,7 +446,7 @@ impl MutationService {
         if resolved_playlist_id.is_none() {
             resolved_playlist_id = self.album_playlist_id(browse_id).await?;
         }
-        let entity = match fetched_album {
+        let entity = match fetched_album.clone() {
             Some(mut existing) => {
                 existing.bookmarked_at = Some(SystemTime::now());
                 if let Some(thumbnail_url) = thumbnail_url {
@@ -494,7 +490,9 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Ok(Some(mut restored)) = self.store.fetch_album(browse_id) {
+                if let Some(original) = &fetched_album {
+                    let _ = self.store.save_album(original);
+                } else if let Ok(Some(mut restored)) = self.store.fetch_album(browse_id) {
                     restored.bookmarked_at = None;
                     let _ = self.store.save_album(&restored);
                 }
@@ -509,10 +507,9 @@ impl MutationService {
         browse_id: &str,
         playlist_id: Option<&str>,
     ) -> Result<(), SyncError> {
-        let mut had_bookmark = false;
         let mut existing_playlist_id = playlist_id.filter(|p| !p.is_empty()).map(str::to_string);
-        if let Some(mut existing) = self.store.fetch_album(browse_id)? {
-            had_bookmark = existing.bookmarked_at.is_some();
+        let original = self.store.fetch_album(browse_id)?;
+        if let Some(mut existing) = original.clone() {
             existing.bookmarked_at = None;
             if existing_playlist_id.is_none() {
                 existing_playlist_id = existing.playlist_id.clone().filter(|p| !p.is_empty());
@@ -536,9 +533,8 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if had_bookmark && let Ok(Some(mut restored)) = self.store.fetch_album(browse_id) {
-                    restored.bookmarked_at = Some(SystemTime::now());
-                    let _ = self.store.save_album(&restored);
+                if let Some(original) = &original {
+                    let _ = self.store.save_album(original);
                 }
             },
         )
@@ -600,7 +596,8 @@ impl MutationService {
         channel_id: Option<&str>,
         feedback_token: Option<&str>,
     ) -> Result<(), SyncError> {
-        let podcast = match self.store.fetch_podcast(browse_id)? {
+        let original = self.store.fetch_podcast(browse_id)?;
+        let podcast = match original.clone() {
             Some(mut existing) => {
                 existing.subscribed_at = Some(SystemTime::now());
                 if !name.is_empty() {
@@ -638,7 +635,9 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Ok(Some(mut restored)) = self.store.fetch_podcast(browse_id) {
+                if let Some(original) = &original {
+                    let _ = self.store.save_podcast(original);
+                } else if let Ok(Some(mut restored)) = self.store.fetch_podcast(browse_id) {
                     restored.subscribed_at = None;
                     let _ = self.store.save_podcast(&restored);
                 }
@@ -654,7 +653,8 @@ impl MutationService {
         channel_id: Option<&str>,
         feedback_token: Option<&str>,
     ) -> Result<(), SyncError> {
-        if let Some(mut existing) = self.store.fetch_podcast(browse_id)? {
+        let original = self.store.fetch_podcast(browse_id)?;
+        if let Some(mut existing) = original.clone() {
             existing.subscribed_at = None;
             self.store.save_podcast(&existing)?;
         }
@@ -676,9 +676,8 @@ impl MutationService {
                 Ok(())
             },
             async {
-                if let Ok(Some(mut restored)) = self.store.fetch_podcast(browse_id) {
-                    restored.subscribed_at = restored.subscribed_at.or(Some(SystemTime::now()));
-                    let _ = self.store.save_podcast(&restored);
+                if let Some(original) = &original {
+                    let _ = self.store.save_podcast(original);
                 }
             },
         )

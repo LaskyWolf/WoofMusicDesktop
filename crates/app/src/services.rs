@@ -717,3 +717,29 @@ fn song_item(song: &SongEntity) -> SongItem {
         ..SongItem::default()
     }
 }
+
+#[cfg(test)]
+impl Services {
+    /// No libmpv and an in-memory database; nothing reaches the network until a task runs.
+    pub fn for_test() -> Arc<Self> {
+        let dir = std::env::temp_dir().join("woofmusic-test");
+        let client = Arc::new(InnerTubeClient::new(
+            SwiftyTubeConfig::music(),
+            AuthState::guest(),
+        ));
+        let db = Arc::new(DatabaseService::open_in_memory());
+        Arc::new(Self {
+            downloads: DownloadManager::new(db.clone(), dir.join("downloads")),
+            sync: SyncBridge::new(client.clone(), db.clone(), dir.join("sync.json")),
+            lyrics: Arc::new(LyricsService::new(
+                LyricsManager::new(Session::shared()),
+                dir.join("lyrics.json"),
+            )),
+            client,
+            player: None,
+            db,
+            providers: StreamResolveProviders::none(),
+            http: reqwest::Client::new(),
+        })
+    }
+}

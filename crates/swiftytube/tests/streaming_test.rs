@@ -9,7 +9,9 @@ use swiftytube::streaming::client_fallback_chain::ClientFallbackChain;
 use swiftytube::streaming::duration_cache::DurationCache;
 use swiftytube::streaming::format_selector::FormatSelector;
 use swiftytube::streaming::playback_quality::{AudioQuality, DownloadQuality, VideoQuality};
+use swiftytube::streaming::playback_result::PlaybackResult;
 use swiftytube::streaming::player_response::{Format, PlayerResponse};
+use swiftytube::streaming::stream_cache::StreamCache;
 use swiftytube::streaming::stream_fallback::StreamFallback;
 use swiftytube::streaming::stream_resolver::{
     StreamResolveOptions, StreamResolveProviders, StreamResolver,
@@ -221,4 +223,30 @@ fn edl_combines_tracks_with_byte_lengths() {
         StreamFallback::combine_video_and_audio("v", "aa", Some(3)),
         "edl://!new_stream;!no_clip;!no_chapters;%1%v,length=3;!new_stream;!no_clip;!no_chapters;%2%aa,length=3"
     );
+}
+
+#[test]
+fn stream_cache_tolerates_an_absurd_expiry() {
+    let result = PlaybackResult {
+        stream_url: "https://x".into(),
+        itag: 140,
+        mime_type: "audio/mp4".into(),
+        bitrate: 0,
+        audio_quality: String::new(),
+        video_id: "abcdefghijk".into(),
+        title: None,
+        author: None,
+        duration: None,
+        expires_in_seconds: i64::MAX,
+        client_name: "IOS".into(),
+        music_video_type: None,
+        has_video_content: false,
+        muxed_stream_url: None,
+        muxed_width: None,
+        muxed_height: None,
+        loudness_db: None,
+    };
+    let cache = StreamCache::default();
+    cache.set("abcdefghijk", result.clone());
+    assert_eq!(cache.get("abcdefghijk"), Some(result));
 }
