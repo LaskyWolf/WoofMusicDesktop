@@ -311,7 +311,8 @@ impl DownloadManager {
             video_id,
             Self::extension(&resolved.mime_type),
         );
-        let part = self.dir.join(format!(".{video_id}.part"));
+        // One file per run: a cancelled run removes its own file, not a retry's.
+        let part = self.dir.join(format!(".{video_id}.{token}.part"));
         let fetched = self.fetch(&resolved.url, &part, video_id, token).await;
         // Deleted while saving: stop before the file gets its name.
         let fetched = fetched.and_then(|()| {
