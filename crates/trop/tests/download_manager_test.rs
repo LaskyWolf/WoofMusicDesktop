@@ -1,0 +1,125 @@
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::Arc;
+
+use trop::database::database_service::DatabaseService;
+use trop::database::entities::downloaded_track_entity::DownloadedTrackEntity;
+use trop::networking::models::yt_item::{SongItem, YTArtist};
+use trop::services::download_manager::{DownloadManager, Resolved};
+
+#[test]
+fn file_names_follow_swift() {
+    assert_eq!(
+        DownloadManager::file_name("Song", "A, B", "abc123", "m4a"),
+        "A, B - Song [abc123].m4a"
+    );
+    assert_eq!(
+        DownloadManager::file_name("", "A", "abc123", "webm"),
+        "abc123 [abc123].webm"
+    );
+    assert_eq!(
+        DownloadManager::sanitize_file_name(" AC/DC: Live?. "),
+        "AC-DC- Live-"
+    );
+    assert_eq!(DownloadManager::sanitize_file_name("..."), "Untitled");
+    assert_eq!(
+        DownloadManager::extension("audio/webm; codecs=\"opus\""),
+        "webm"
+    );
+    assert_eq!(
+        DownloadManager::extension("audio/mp4; codecs=\"mp4a.40.2\""),
+        "m4a"
+    );
+}
+
+/// Serves `body` once over HTTP on a local port and returns its URL.
+fn serve_once(body: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 1024];
+        let _ = stream.read(&mut request);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&body).unwrap();
+    });
+    url
+}
+
+fn resolved(url: String, mime_type: &str) -> Resolved {
+    Resolved {
+        url,
+        mime_type: mime_type.to_owned(),
+        duration: Some(1),
+    }
+}
+
+#[tokio::test]
+async fn download_records_the_row_and_delete_removes_it() {
+    let dir = std::env::temp_dir().join(format!("woof-downloads-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let db = Arc::new(DatabaseService::open_in_memory());
+    let manager = DownloadManager::new(db.clone(), dir.clone());
+    let song = SongItem {
+        video_id: "vid_123456".into(),
+        title: "Song".into(),
+        artists: vec![YTArtist {
+            name: "Artist".into(),
+            id: None,
+        }],
+        duration: 180,
+        ..SongItem::default()
+    };
+    let url = serve_once(vec![7; 20_000]);
+    let saved = manager
+        .download(song.clone(), async { Ok(resolved(url, "audio/webm")) })
+        .await;
+    assert_eq!(saved, Ok(true));
+    assert!(manager.downloads().is_empty());
+
+    let row = db
+        .fetch_one::<DownloadedTrackEntity>("vid_123456")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.local_path, "Artist - Song [vid_123456].webm");
+    assert_eq!(row.artist, "Artist");
+    let path = manager.local_path("vid_123456").unwrap();
+    assert_eq!(path, dir.join(&row.local_path));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 20_000);
+    assert_eq!(manager.tracks().unwrap(), vec![row]);
+
+    // A row whose file is gone leaves the list.
+    std::fs::rename(&path, dir.join("moved")).unwrap();
+    assert!(manager.tracks().unwrap().is_empty());
+    assert!(
+        db.fetch_one::<DownloadedTrackEntity>("vid_123456")
+            .unwrap()
+            .is_none()
+    );
+
+    // A failed resolve shows as a failed download until cancelled.
+    let failed = manager
+        .download(song.clone(), async { Err("no stream".to_owned()) })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(manager.downloads().len(), 1);
+    manager.cancel("vid_123456");
+    assert!(manager.downloads().is_empty());
+
+    // Delete removes the file and the row.
+    let url = serve_once(vec![7; 20_000]);
+    let saved = manager
+        .download(song, async { Ok(resolved(url, "audio/mp4")) })
+        .await;
+    assert_eq!(saved, Ok(true));
+    let path = manager.local_path("vid_123456").unwrap();
+    assert!(path.ends_with("Artist - Song [vid_123456].m4a"));
+    manager.delete("vid_123456").unwrap();
+    assert!(!path.exists());
+    assert!(manager.local_path("vid_123456").is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

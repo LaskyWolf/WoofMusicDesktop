@@ -384,7 +384,7 @@ fn subscriber_label(count: &str) -> String {
     }
 }
 
-fn count(n: i64, noun: &str) -> String {
+pub(crate) fn count(n: i64, noun: &str) -> String {
     match n {
         0 => String::new(),
         1 => format!("1 {noun}"),
@@ -468,7 +468,7 @@ impl LibraryFilter {
     ];
 }
 
-/// Swift `LibraryView`: filter chips, the Liked Songs and My Top 100 cards,
+/// Swift `LibraryView`: filter chips, the Liked Songs, My Top 100 and Downloads cards,
 /// then playlists, albums, artists and podcasts.
 pub fn library<'a>(
     covers: &'a Covers,
@@ -516,6 +516,18 @@ pub fn library<'a>(
             crate::icons::TROPHY,
             Color::from_rgb8(0xFF, 0x95, 0x00),
             Route::TopSongs,
+        ),
+        shortcut(
+            covers,
+            "Downloads",
+            match library.downloaded_count {
+                0 => "Offline".to_owned(),
+                n => count(n, "song"),
+            },
+            &library.downloaded_covers,
+            crate::downloads::icons::DOWNLOAD,
+            Color::from_rgb8(0x2F, 0x6F, 0xDB),
+            Route::Downloads,
         ),
     ]
     .spacing(12);
