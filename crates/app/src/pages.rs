@@ -474,6 +474,7 @@ pub fn library<'a>(
     covers: &'a Covers,
     library: &'a Library,
     filter: Option<LibraryFilter>,
+    syncing: bool,
 ) -> Element<'a, Message> {
     let chips = row(LibraryFilter::ALL.map(|(chip, label)| {
         let selected = filter == Some(chip);
@@ -532,7 +533,11 @@ pub fn library<'a>(
     }
     if page.len() == 1 {
         page.push(
-            text("Nothing here yet. Your library appears once the sync finishes.")
+            text(if syncing {
+                "Syncing your library…"
+            } else {
+                "Nothing here yet. Save playlists, albums and artists in YouTube Music and they show up here."
+            })
                 .size(15)
                 .color(theme::SECONDARY)
                 .into(),

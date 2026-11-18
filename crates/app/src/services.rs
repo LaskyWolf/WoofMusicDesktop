@@ -14,6 +14,7 @@ use swiftytube::networking::inner_tube_client::InnerTubeClient;
 use swiftytube::streaming::stream_cache::StreamCache;
 use swiftytube::streaming::stream_fallback::{StreamFallback, StreamResolveRequest};
 use swiftytube::streaming::stream_resolver::{StreamResolveOptions, StreamResolveProviders};
+use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::database::database_service::DatabaseService;
@@ -31,6 +32,7 @@ use trop::networking::models::yt_item::{
 };
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::services::sync_bridge::SyncBridge;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
 use crate::{Detail, Route};
@@ -41,6 +43,7 @@ pub struct Services {
     pub player: Option<Arc<PlayerController>>,
     /// The synced library; in memory when the file cannot open.
     pub db: Arc<DatabaseService>,
+    sync: SyncBridge,
     providers: StreamResolveProviders,
     http: reqwest::Client,
 }
@@ -60,16 +63,21 @@ impl Services {
                 None
             }
         };
+        let client = Arc::new(InnerTubeClient::new(
+            SwiftyTubeConfig::music(),
+            AuthState::guest(),
+        ));
+        let db = Arc::new(match DatabaseService::default_path() {
+            Some(path) => DatabaseService::open(&path),
+            None => DatabaseService::open_in_memory(),
+        });
+        let last_sync = IncrementalSyncService::default_defaults_path()
+            .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-sync.json"));
         Arc::new(Self {
-            client: Arc::new(InnerTubeClient::new(
-                SwiftyTubeConfig::music(),
-                AuthState::guest(),
-            )),
+            sync: SyncBridge::new(client.clone(), db.clone(), last_sync),
+            client,
             player,
-            db: Arc::new(match DatabaseService::default_path() {
-                Some(path) => DatabaseService::open(&path),
-                None => DatabaseService::open_in_memory(),
-            }),
+            db,
             providers: StreamResolveProviders::live(),
             http: reqwest::Client::new(),
         })
@@ -175,6 +183,12 @@ impl Services {
             .await
             .ok_or("The library could not be read.")?
             .map_err(|error| error.to_string())
+    }
+
+    /// Syncs the library unless it synced in the last 30 minutes. A sync
+    /// already running is shared, not started twice.
+    pub async fn sync_library(self: Arc<Self>) {
+        self.sync.check_and_sync_if_stale().await;
     }
 
     // MARK: - Session

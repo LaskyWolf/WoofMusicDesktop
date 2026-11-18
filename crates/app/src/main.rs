@@ -246,6 +246,8 @@ struct App {
     /// `None` until Library first opens; reloaded each time it opens.
     library: Option<Load<Library>>,
     library_filter: Option<LibraryFilter>,
+    /// A library sync is running.
+    syncing: bool,
     player: Player,
     /// Now Playing covers the page.
     now_playing: bool,
@@ -313,6 +315,7 @@ pub enum Message {
     Back,
     PageScrolled(f32),
     LibraryLoaded(Result<Library, String>),
+    Synced,
     /// A filter chip: shows only that section, or everything again.
     LibraryFilter(LibraryFilter),
     HomeLoaded(Result<Vec<HomeSection>, String>),
@@ -375,6 +378,7 @@ impl App {
             covers: HashMap::new(),
             library: None,
             library_filter: None,
+            syncing: false,
             player: Player::default(),
             // Dev aids: WOOF_NOW_PLAYING=1 and WOOF_QUEUE=1 open them once a song plays.
             now_playing: std::env::var("WOOF_NOW_PLAYING").is_ok(),
@@ -515,7 +519,8 @@ impl App {
                 self.home = Load::Loading;
                 self.details.clear();
                 self.library = None;
-                Task::batch([load_home(&self.services), self.enter(), account])
+                let sync = if signed_in { self.sync() } else { Task::none() };
+                Task::batch([load_home(&self.services), self.enter(), account, sync])
             }
             Message::Account(result) => {
                 if !matches!(self.session, Session::SignedIn(_)) {
@@ -535,6 +540,19 @@ impl App {
                 };
                 self.library = Some(loaded(result));
                 covers
+            }
+            Message::Synced => {
+                self.syncing = false;
+                // Liked Songs and My Top 100 read the database: open them fresh.
+                self.details.remove("liked");
+                self.details.remove("top100");
+                // Only the data: `enter` would start another sync.
+                match self.route() {
+                    Route::Library => {
+                        Task::perform(self.services.clone().load_library(), Message::LibraryLoaded)
+                    }
+                    _ => Task::none(),
+                }
             }
             Message::LibraryFilter(filter) => {
                 self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
@@ -764,7 +782,10 @@ impl App {
                 if matches!(self.library, Some(Load::Failed(_))) {
                     self.library = None;
                 }
-                Task::perform(self.services.clone().load_library(), Message::LibraryLoaded)
+                Task::batch([
+                    Task::perform(self.services.clone().load_library(), Message::LibraryLoaded),
+                    self.sync(),
+                ])
             }
             Route::Library => Task::none(),
             Route::Search => focus(pages::SEARCH_INPUT),
@@ -788,6 +809,15 @@ impl App {
                 })
             }
         }
+    }
+
+    /// Swift `SyncBridge.checkAndSyncIfStale`, at sign-in and when Library opens.
+    fn sync(&mut self) -> Task<Message> {
+        if self.syncing {
+            return Task::none();
+        }
+        self.syncing = true;
+        Task::perform(self.services.clone().sync_library(), |()| Message::Synced)
     }
 
     fn play(&mut self, songs: Arc<Vec<SongItem>>, index: usize) -> Task<Message> {
@@ -932,7 +962,7 @@ impl App {
             Route::Library => match &self.session {
                 Session::SignedIn(_) => match &self.library {
                     Some(Load::Loaded(library)) => {
-                        pages::library(covers, library, self.library_filter)
+                        pages::library(covers, library, self.library_filter, self.syncing)
                     }
                     Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                     _ => ui::status(None, Message::Retry),
