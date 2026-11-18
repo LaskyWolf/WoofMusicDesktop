@@ -18,7 +18,8 @@ use swiftytube::sync::browse_lens::BrowseLens;
 use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::library_browse_parser::LibraryBrowseParser;
 use swiftytube::sync::library_sync_models::{
-    LibrarySyncOptions, SongMergeArgs, SongMetadata, SyncArtist, SyncPlaylist, SyncSong,
+    LibrarySyncOptions, SongMergeArgs, SongMetadata, SyncArtist, SyncPlaylist, SyncPlaylistEntry,
+    SyncSong,
 };
 use swiftytube::sync::library_sync_service::LibrarySyncService;
 use swiftytube::sync::library_sync_store::LibrarySyncStore;
@@ -935,4 +936,70 @@ fn album_playlist_id_comes_from_the_like_endpoint_or_the_canonical_url() {
         MutationService::album_playlist_id_in(&JsonDict::new()),
         None
     );
+}
+
+#[tokio::test]
+async fn failed_re_add_keeps_the_song_already_in_the_playlist() {
+    let (mutations, store, _) = mutation_service(Arc::new(AtomicBool::new(true)));
+    store
+        .insert_or_replace_playlist(&SyncPlaylist {
+            id: "PLx".into(),
+            browse_id: Some("VLPLx".into()),
+            name: "Mix".into(),
+            thumbnail_url: None,
+            is_editable: true,
+            bookmarked_at: Some(SystemTime::now()),
+            remote_song_count: Some(1),
+            is_auto_sync: false,
+        })
+        .unwrap();
+    let entry = SyncPlaylistEntry {
+        playlist_id: "PLx".into(),
+        song_id: "abcdefghijk".into(),
+        position: 0,
+        set_video_id: Some("SET1".into()),
+    };
+    store.insert_map_ignoring_conflicts(&entry).unwrap();
+    assert!(
+        mutations
+            .add_to_playlist("PLx", "abcdefghijk", None)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.fetch_map_entry("PLx", "abcdefghijk").unwrap(),
+        Some(entry)
+    );
+}
+
+#[tokio::test]
+async fn failed_subscribe_restores_the_artist_row() {
+    let (mutations, store, _) = mutation_service(Arc::new(AtomicBool::new(true)));
+    let artist = SyncArtist {
+        id: "UCartist".into(),
+        name: "Artist".into(),
+        thumbnail_url: None,
+        bookmarked_at: None,
+        is_podcast_channel: false,
+        channel_id: Some("UCchannel".into()),
+    };
+    store.save_artist(&artist).unwrap();
+    assert!(
+        mutations
+            .subscribe_artist("UCchannel", "UCartist")
+            .await
+            .is_err()
+    );
+    assert_eq!(store.fetch_artist("UCartist").unwrap(), Some(artist));
+}
+
+#[tokio::test]
+async fn failed_unlike_of_an_unliked_song_leaves_it_unliked() {
+    let fail = Arc::new(AtomicBool::new(false));
+    let (mutations, store, _) = mutation_service(fail.clone());
+    mutations.like_song("abcdefghijk").await.unwrap();
+    mutations.unlike_song("abcdefghijk").await.unwrap();
+    fail.store(true, Ordering::SeqCst);
+    assert!(mutations.unlike_song("abcdefghijk").await.is_err());
+    assert!(liked_song_ids(&store).is_empty());
 }
