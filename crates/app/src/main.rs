@@ -8,6 +8,7 @@ mod pages;
 mod services;
 mod theme;
 mod title_bar;
+mod transitions;
 mod ui;
 mod virtual_list;
 
@@ -22,6 +23,7 @@ use iced::{
     Alignment, Background, Border, Color, Element, Length, Padding, Size, Subscription, Task,
     keyboard, window,
 };
+use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
 use trop::audio::player_controller::player_controller::State as PlayState;
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
@@ -33,6 +35,7 @@ use trop::search::search_parser::SearchSection;
 use pages::LibraryFilter;
 use services::{Artwork, Library, Lyrics, Services};
 use swiftytube::auth::account_info::AccountInfo;
+use transitions::Transitions;
 use trop::playback::playback_state_service::{PlayRecord, PlaybackStateService};
 
 pub(crate) const APP_ID: &str = "com.laskywolf.woofmusic";
@@ -49,6 +52,8 @@ pub fn main() -> iced::Result {
         Some("--refresh") => login::run(true),
         _ => {}
     }
+    // RUST_LOG=info shows the player's and the crossfade's log.
+    env_logger::init();
     iced::application(App::new, App::update, App::view)
         .title("WoofMusic")
         .subscription(App::subscription)
@@ -263,6 +268,8 @@ struct App {
     artwork: Option<(String, Artwork)>,
     /// Counts how long each song plays, for My Top 100 and history.
     plays: PlaybackStateService,
+    /// Crossfades and AutoMix between songs; `None` without libmpv.
+    transitions: Option<Transitions>,
     session: Session,
     /// Why the last sign-in did not finish, under the sign-in button.
     sign_in_error: Option<&'static str>,
@@ -402,6 +409,10 @@ impl App {
             queue_list: virtual_list::State::default(),
             artwork: None,
             plays: PlaybackStateService::default(),
+            transitions: services
+                .player
+                .clone()
+                .map(|player| Transitions::new(player, dev_transitions())),
             // Dev aid: WOOF_SIGNED_IN=1 shows the signed-in pages without a session.
             session: if std::env::var("WOOF_SIGNED_IN").is_ok() {
                 Session::SignedIn(None)
@@ -700,11 +711,13 @@ impl App {
                 Task::none()
             }
             Message::TogglePlay => {
+                // A pause cuts a running crossfade short.
+                let finished = self.finish_transition();
                 if let Some(player) = &self.services.player {
                     player.toggle_play_pause();
                 }
                 self.read_player();
-                Task::none()
+                finished
             }
             Message::Next => self.next(),
             Message::Seeking(position) => {
@@ -712,13 +725,14 @@ impl App {
                 Task::none()
             }
             Message::Seek => {
+                let finished = self.finish_transition();
                 if let Some(position) = self.player.seeking.take() {
                     if let Some(player) = &self.services.player {
                         player.seek(position);
                     }
                     self.player.position = position;
                 }
-                Task::none()
+                finished
             }
             Message::Artwork(video_id, artwork) => {
                 if let Some(artwork) = artwork {
@@ -809,14 +823,16 @@ impl App {
                     .set_playing(self.player.state == PlayState::Playing, now);
                 let banked = self.plays.tick(now);
                 let saved = self.save_plays(banked);
+                dev_seek_end(&self.services, &self.player);
+                let transition = self.tick_transitions();
                 // A song that played to its end: on to the next one.
                 if was == PlayState::Playing
                     && self.player.state == PlayState::Stopped
                     && !self.player.starting
                 {
-                    Task::batch([saved, self.next()])
+                    Task::batch([saved, transition, self.next()])
                 } else {
-                    saved
+                    Task::batch([saved, transition])
                 }
             }
             Message::Snapshot(shot) => {
@@ -922,13 +938,31 @@ impl App {
             return Task::none();
         };
         let video_id = song.video_id.clone();
+        if let Some(transitions) = &mut self.transitions {
+            transitions.reset("a song was loaded");
+        }
+        self.player.request += 1;
+        let request = self.player.request;
+        self.player.starting = true;
+        Task::batch([
+            Task::perform(self.services.clone().resolve(video_id), move |result| {
+                Message::Resolved(request, result)
+            }),
+            self.song_changed(),
+        ])
+    }
+
+    /// The queue's current song changed, loaded or crossfaded into: count
+    /// its plays, fetch its cover, colours and lyrics.
+    fn song_changed(&mut self) -> Task<Message> {
+        let Some(song) = self.player.song() else {
+            return Task::none();
+        };
+        let video_id = song.video_id.clone();
         let cover = song.thumbnail_url.clone();
         let finished = self.plays.stop_tracking(Instant::now());
         self.plays.start_tracking(&video_id);
         let saved = self.save_plays(finished);
-        self.player.request += 1;
-        let request = self.player.request;
-        self.player.starting = true;
         self.player.error = None;
         self.player.position = 0.0;
         self.player.duration = 0.0;
@@ -943,14 +977,61 @@ impl App {
             _ => Task::none(),
         };
         Task::batch([
-            Task::perform(self.services.clone().resolve(video_id), move |result| {
-                Message::Resolved(request, result)
-            }),
             self.fetch_covers(cover),
             artwork,
             saved,
             self.fetch_lyrics(),
         ])
+    }
+
+    /// Drives crossfades and AutoMix; when the decks swapped, the queue moves
+    /// on to the song now playing.
+    fn tick_transitions(&mut self) -> Task<Message> {
+        let Some(transitions) = &mut self.transitions else {
+            return Task::none();
+        };
+        let player = &self.player;
+        let np = NowPlayingState {
+            video_id: player.song().map(|song| song.video_id.as_str()),
+            next_video_id: player
+                .queue
+                .get(player.index + 1)
+                .map(|song| song.video_id.as_str()),
+            is_playing: player.state == PlayState::Playing,
+            current_time: player.position,
+            duration: player.duration,
+            ..NowPlayingState::default()
+        };
+        let task = transitions.tick(&np, &self.services);
+        Task::batch([task, self.advance_if_promoted()])
+    }
+
+    /// Ends a running crossfade at once (pause or seek).
+    fn finish_transition(&mut self) -> Task<Message> {
+        let Some(transitions) = &mut self.transitions else {
+            return Task::none();
+        };
+        let task = transitions.finish_now();
+        Task::batch([task, self.advance_if_promoted()])
+    }
+
+    fn advance_if_promoted(&mut self) -> Task<Message> {
+        let Some(promoted) = self
+            .transitions
+            .as_ref()
+            .and_then(Transitions::take_promoted)
+        else {
+            return Task::none();
+        };
+        let next = self.player.queue.get(self.player.index + 1);
+        if next.is_none_or(|song| song.video_id != promoted) {
+            return Task::none();
+        }
+        self.player.index += 1;
+        self.player.starting = false;
+        let changed = self.song_changed();
+        self.read_player();
+        changed
     }
 
     /// Fetches the current song's lyrics, so they are there when Now Playing shows them.
@@ -1002,8 +1083,8 @@ impl App {
             media_controls::events(),
         ];
         if self.player.song().is_some() {
-            // Lyric lines change on the beat; the seek bar alone is fine at half a second.
-            let every = if self.showing_lyrics() { 150 } else { 500 };
+            // Lyric lines change on the beat; crossfades plan and start on a 0.25 s tick (Swift).
+            let every = if self.showing_lyrics() { 150 } else { 250 };
             subscriptions
                 .push(iced::time::every(Duration::from_millis(every)).map(|_| Message::Tick));
         }
@@ -1379,6 +1460,37 @@ fn dev_route() -> Option<Route> {
             "search" => Some(Route::Search),
             _ => None,
         },
+    }
+}
+
+/// Dev aid until Settings has them: WOOF_CROSSFADE=6 turns Smart Crossfade on
+/// for 6 s, WOOF_AUTOMIX=1 turns AutoMix on.
+fn dev_transitions() -> TransitionSettings {
+    let crossfade = std::env::var("WOOF_CROSSFADE")
+        .ok()
+        .and_then(|seconds| seconds.parse::<f64>().ok());
+    TransitionSettings {
+        auto_mix_enabled: std::env::var("WOOF_AUTOMIX").is_ok(),
+        crossfade_enabled: crossfade.is_some(),
+        crossfade_seconds: crossfade.unwrap_or(6.0).clamp(1.0, 12.0),
+        ..TransitionSettings::default()
+    }
+}
+
+/// Dev aid: WOOF_SEEK_END=45 jumps to 45 s before the end of the first song,
+/// to hear a crossfade without waiting for it.
+fn dev_seek_end(services: &Services, player: &Player) {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let Some(lead) = std::env::var("WOOF_SEEK_END")
+        .ok()
+        .and_then(|lead| lead.parse::<f64>().ok())
+    else {
+        return;
+    };
+    if player.duration > lead && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if let Some(mpv) = &services.player {
+            mpv.seek(player.duration - lead);
+        }
     }
 }
 
