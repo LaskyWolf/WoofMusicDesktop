@@ -41,6 +41,8 @@ struct Shared {
     /// The playing file ended with an error (Swift `stopped(isEof: false)`),
     /// until `take_failed`.
     failed: bool,
+    /// The volume slider, 0...1; mpv's volume is `100 × volume`.
+    volume: f64,
     /// While true, the outgoing song's end finishes the crossfade instead of
     /// stopping playback.
     is_crossfading: bool,
@@ -132,6 +134,7 @@ impl PlayerController {
             pending_video_id: None,
             desired_playing: false,
             failed: false,
+            volume: 1.0,
             is_crossfading: false,
             events: DeckEvents::default(),
             has_bass_filter: true,
@@ -201,7 +204,7 @@ impl PlayerController {
         let mpv = &deck.handle;
         mpv.set_property("pause", !desired_playing)?;
         // A cancelled crossfade can leave the deck faded or sped up.
-        mpv.set_property("volume", 100.0)?;
+        mpv.set_property("volume", 100.0 * self.volume())?;
         mpv.set_property("speed", 1.0)?;
         mpv.set_property("start", start.map_or("none".to_string(), fmt))?;
         self.apply_filters(&deck, None, None);
@@ -318,6 +321,25 @@ impl PlayerController {
 
     /// Whether the playing file ended with an error since the last call: the
     /// app retries it instead of moving on.
+    pub fn volume(&self) -> f64 {
+        lock(&self.shared).volume
+    }
+
+    /// Sets the volume slider (0...1). A running crossfade picks it up on
+    /// its next step; otherwise the playing deck changes now.
+    pub fn set_volume(&self, volume: f64) {
+        let crossfading = {
+            let mut shared = lock(&self.shared);
+            shared.volume = volume.clamp(0.0, 1.0);
+            shared.is_crossfading
+        };
+        if !crossfading {
+            let _ = self
+                .active_deck()
+                .set("volume", &fmt(100.0 * volume.clamp(0.0, 1.0)));
+        }
+    }
+
     pub fn take_failed(&self) -> bool {
         std::mem::take(&mut lock(&self.shared).failed)
     }

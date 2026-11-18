@@ -1,5 +1,6 @@
 //! The app's link to YouTube Music and libmpv: loads pages, covers and streams.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use iced::widget::image;
@@ -39,6 +40,7 @@ use trop::playback::playback_state_service::{PlayRecord, save};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::services::download_manager::{DownloadManager, Resolved};
+use trop::services::personalization_service::{self, RadioOptions};
 use trop::services::sync_bridge::SyncBridge;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
@@ -407,6 +409,56 @@ impl Services {
             .map_err(|error| error.to_string())
         };
         self.downloads.download(song, resolve).await
+    }
+
+    /// The ids of the liked songs (Swift `LikeStore.refresh`).
+    pub async fn liked_ids(self: Arc<Self>) -> HashSet<String> {
+        blocking(move || self.db.fetch_liked_song_ids())
+            .await
+            .and_then(Result::ok)
+            .map(|ids| ids.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Likes or un-likes `song` on the account (Swift `LikeStore.toggle`).
+    pub async fn set_liked(self: Arc<Self>, song: SongItem, liked: bool) -> Result<(), String> {
+        let mutations = &self.sync.mutations;
+        let result = if liked {
+            mutations.like_song(&song.video_id).await
+        } else {
+            mutations.unlike_song(&song.video_id).await
+        };
+        result.map_err(|error| error.to_string())?;
+        crate::integrations::love(&song, liked);
+        Ok(())
+    }
+
+    /// A queue of songs like `video_id`, and its index in it.
+    pub async fn radio(
+        self: Arc<Self>,
+        video_id: String,
+    ) -> Result<(Vec<SongItem>, usize), String> {
+        personalization_service::fetch_radio(&self.client, &video_id, RadioOptions::default()).await
+    }
+
+    /// The saved playlists "Add to Playlist" offers (Swift `fetchPlaylists(limit: 100)`).
+    pub async fn playlists(self: Arc<Self>) -> Vec<PlaylistEntity> {
+        blocking(move || self.db.fetch_playlists(Some(100)))
+            .await
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    }
+
+    pub async fn add_to_playlist(
+        self: Arc<Self>,
+        playlist_id: String,
+        video_id: String,
+    ) -> Result<(), String> {
+        self.sync
+            .mutations
+            .add_to_playlist(&playlist_id, &video_id, None)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// The ids of the saved songs.

@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 base64 = "0.22.1"
+fastrand = "2"
 flate2 = "1.1.11"
 form_urlencoded = "1.2.2"
 libmpv2 = { version = "7", default-features = false }

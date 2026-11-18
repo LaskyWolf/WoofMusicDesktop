@@ -9,13 +9,14 @@ mod now_playing;
 mod pages;
 mod services;
 mod settings;
+mod song_menu;
 mod theme;
 mod title_bar;
 mod transitions;
 mod ui;
 mod virtual_list;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,12 +24,14 @@ use iced::font::Weight;
 use iced::widget::operation::{focus, scroll_to};
 use iced::widget::{Space, button, column, container, row, scrollable, slider, stack, svg, text};
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Padding, Size, Subscription, Task,
-    keyboard, window,
+    Alignment, Background, Border, Color, Element, Length, Padding, Point, Size, Subscription,
+    Task, keyboard, window,
 };
 use swiftytube::streaming::stream_cache::StreamCache;
 use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
+use trop::audio::now_playing::{PlayerDefaults, Queue};
 use trop::audio::player_controller::player_controller::State as PlayState;
+use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
@@ -50,6 +53,8 @@ const MAX_ROW_COVERS: usize = 300;
 /// Previous restarts the song instead once it has played this long, in seconds.
 const RESTART_AFTER: f64 = 3.0;
 
+const WINDOW_SIZE: Size = Size::new(1280.0, 800.0);
+
 pub fn main() -> iced::Result {
     match std::env::args().nth(1).as_deref() {
         Some("--login") => login::run(false),
@@ -68,7 +73,7 @@ pub fn main() -> iced::Result {
             text_color: theme::TEXT,
         })
         .window(window::Settings {
-            size: dev_size().unwrap_or(Size::new(1280.0, 800.0)),
+            size: dev_size().unwrap_or(WINDOW_SIZE),
             min_size: Some(Size::new(880.0, 560.0)),
             decorations: false,
             #[cfg(target_os = "linux")]
@@ -285,6 +290,15 @@ struct App {
     cookie_header: String,
     downloads: downloads::Downloads,
     settings: settings::State,
+    /// The open song menu.
+    menu: Option<song_menu::Menu>,
+    /// Where the last right-click was, in the window: the song menu opens there.
+    right_click: Point,
+    window: Size,
+    /// The account's liked songs (Swift `LikeStore`).
+    liked: HashSet<String>,
+    /// A short message above the player bar, with its id so a newer one is not cleared early.
+    notice: Option<(u64, String)>,
 }
 
 pub enum Session {
@@ -298,8 +312,8 @@ pub enum Session {
 /// The queue and what the player bar shows.
 #[derive(Default)]
 struct Player {
-    queue: Arc<Vec<SongItem>>,
-    index: usize,
+    /// The songs, the current one, Play Next, shuffle and repeat.
+    queue: Queue,
     state: PlayState,
     position: f64,
     duration: f64,
@@ -319,11 +333,11 @@ struct Player {
 
 impl Player {
     fn song(&self) -> Option<&SongItem> {
-        self.queue.get(self.index)
+        self.queue.song()
     }
 
     fn has_next(&self) -> bool {
-        self.index + 1 < self.queue.len()
+        self.queue.has_next()
     }
 }
 
@@ -336,7 +350,7 @@ enum Load<T> {
 #[derive(Debug, Clone)]
 pub enum Message {
     TitleBar(title_bar::Message),
-    Resized,
+    Resized(Size),
     Maximized(bool),
     /// Push a page.
     Navigate(Route),
@@ -391,6 +405,29 @@ pub enum Message {
     Settings(settings::Message),
     /// A Playback setting changed: transitions use it from the next song.
     Transitions(TransitionSettings),
+    /// Sent by `song_menu::root` before the song under the cursor sends `SongMenu`.
+    RightClickAt(Point),
+    /// Opens the song menu; the index is the song's place in the queue panel.
+    SongMenu(Box<SongItem>, Option<usize>),
+    /// The player bar's More button: the menu of the playing song.
+    MoreMenu,
+    MenuAction(song_menu::Action),
+    CloseMenu,
+    MenuPlaylists(Vec<PlaylistEntity>),
+    Likes(HashSet<String>),
+    Like(Box<SongItem>, bool),
+    Liked(Box<SongItem>, bool, Result<(), String>),
+    /// A radio for the song with this id, to follow it in the queue.
+    Radio(String, Result<(Vec<SongItem>, usize), String>),
+    /// The queue ran out: a radio of the song that ended (Swift `autoplaySimilar`).
+    AutoplayRadio(String, Result<(Vec<SongItem>, usize), String>),
+    AddedToPlaylist(String, Result<(), String>),
+    ClearNotice(u64),
+    Shuffle,
+    Repeat,
+    Volume(f64),
+    /// The volume slider was let go, or repeat changed: remember them.
+    SaveDefaults,
 }
 
 impl App {
@@ -443,7 +480,19 @@ impl App {
             cookie_header: String::new(),
             downloads: downloads::Downloads::default(),
             settings: settings::State::default(),
+            menu: None,
+            right_click: Point::ORIGIN,
+            window: dev_size().unwrap_or(WINDOW_SIZE),
+            liked: HashSet::new(),
+            notice: None,
         };
+        let defaults = PlayerDefaults::default_path()
+            .map(|path| PlayerDefaults::load(&path))
+            .unwrap_or_default();
+        app.player.queue.is_repeat_on = defaults.repeat;
+        if let Some(player) = &services.player {
+            player.set_volume(defaults.volume);
+        }
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
             Ok(query) => {
@@ -486,9 +535,135 @@ impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TitleBar(message) => title_bar::update(message),
-            Message::Resized => window::latest()
-                .and_then(window::is_maximized)
-                .map(Message::Maximized),
+            Message::Resized(size) => {
+                self.window = size;
+                window::latest()
+                    .and_then(window::is_maximized)
+                    .map(Message::Maximized)
+            }
+            Message::RightClickAt(at) => {
+                self.right_click = at;
+                Task::none()
+            }
+            Message::SongMenu(song, queue_index) => {
+                self.menu = Some(song_menu::Menu {
+                    song: *song,
+                    at: self.right_click,
+                    queue_index,
+                    playlists: None,
+                });
+                Task::none()
+            }
+            Message::MoreMenu => {
+                if let Some(song) = self.player.song() {
+                    // Above the bar's right end; the menu flips up from the bar's top.
+                    let at = Point::new(
+                        self.window.width,
+                        self.window.height - theme::PLAYER_HEIGHT - 2.0 * theme::INSET,
+                    );
+                    self.menu = Some(song_menu::Menu {
+                        song: song.clone(),
+                        at,
+                        queue_index: None,
+                        playlists: None,
+                    });
+                }
+                Task::none()
+            }
+            Message::CloseMenu => {
+                self.menu = None;
+                Task::none()
+            }
+            Message::MenuAction(action) => self.menu_action(action),
+            Message::MenuPlaylists(list) => {
+                if let Some(menu) = &mut self.menu
+                    && menu.playlists.is_some()
+                {
+                    menu.playlists = Some(Some(list));
+                }
+                Task::none()
+            }
+            Message::Likes(liked) => {
+                self.liked = liked;
+                Task::none()
+            }
+            Message::Like(song, liked) => self.like(*song, liked),
+            Message::Liked(song, liked, result) => match result {
+                Ok(()) => {
+                    // Liked Songs reads the database: open it fresh.
+                    self.details.remove("liked");
+                    Task::none()
+                }
+                Err(error) => {
+                    log::warn!("Like failed: {error}");
+                    if liked {
+                        self.liked.remove(&song.video_id);
+                    } else {
+                        self.liked.insert(song.video_id.clone());
+                    }
+                    self.notify(if liked {
+                        "Could not like the song."
+                    } else {
+                        "Could not remove the like."
+                    })
+                }
+            },
+            Message::Radio(video_id, result) => self.radio_loaded(video_id, result),
+            Message::AutoplayRadio(video_id, result) => {
+                let still_here = self
+                    .player
+                    .song()
+                    .is_some_and(|song| song.video_id == video_id)
+                    && self.player.state == PlayState::Stopped;
+                let Ok((songs, _)) = result else {
+                    return Task::none();
+                };
+                // A radio starts with the song it is built from, which just ended.
+                let songs: Vec<SongItem> = songs
+                    .into_iter()
+                    .filter(|song| song.video_id != video_id)
+                    .collect();
+                if !still_here || songs.is_empty() {
+                    return Task::none();
+                }
+                self.player.queue.set(&songs, 0);
+                self.start()
+            }
+            Message::AddedToPlaylist(name, result) => match result {
+                Ok(()) => {
+                    self.details.clear();
+                    self.notify(&format!("Added to {name}"))
+                }
+                Err(error) => {
+                    log::warn!("Add to playlist failed: {error}");
+                    self.notify(&format!("Could not add to {name}."))
+                }
+            },
+            Message::ClearNotice(id) => {
+                if self.notice.as_ref().is_some_and(|(shown, _)| *shown == id) {
+                    self.notice = None;
+                }
+                Task::none()
+            }
+            Message::Shuffle => {
+                if self.player.queue.is_shuffle_on {
+                    self.player.queue.unshuffle();
+                } else {
+                    self.player.queue.shuffle();
+                }
+                Task::none()
+            }
+            Message::Repeat => {
+                self.player.queue.is_repeat_on = !self.player.queue.is_repeat_on;
+                self.save_defaults()
+            }
+            Message::Volume(volume) => {
+                if let Some(player) = &self.services.player {
+                    player.set_volume(volume);
+                }
+                Task::none()
+            }
+            Message::SaveDefaults => self.save_defaults(),
             Message::Maximized(maximized) => {
                 self.maximized = maximized;
                 Task::none()
@@ -574,7 +749,13 @@ impl App {
                 self.details.clear();
                 self.library = None;
                 let sync = if signed_in { self.sync() } else { Task::none() };
-                Task::batch([load_home(&self.services), self.enter(), account, sync])
+                Task::batch([
+                    load_home(&self.services),
+                    self.enter(),
+                    account,
+                    sync,
+                    self.load_likes(),
+                ])
             }
             Message::Download(message) => self.update_download(message),
             Message::Account(result) => {
@@ -602,12 +783,13 @@ impl App {
                 self.details.remove("liked");
                 self.details.remove("top100");
                 // Only the data: `enter` would start another sync.
-                match self.route() {
+                let library = match self.route() {
                     Route::Library => {
                         Task::perform(self.services.clone().load_library(), Message::LibraryLoaded)
                     }
                     _ => Task::none(),
-                }
+                };
+                Task::batch([library, self.load_likes()])
             }
             Message::LibraryFilter(filter) => {
                 self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
@@ -733,7 +915,12 @@ impl App {
                         .map(|error| error.to_string()),
                 };
                 self.read_player();
-                self.dev_download()
+                // Dev aid: WOOF_MENU=1 opens the playing song's menu.
+                let menu = match std::env::var("WOOF_MENU") {
+                    Ok(_) => Task::done(Message::MoreMenu),
+                    Err(_) => Task::none(),
+                };
+                Task::batch([self.dev_download(), menu])
             }
             Message::TogglePlay => {
                 // A pause cuts a running crossfade short.
@@ -781,7 +968,7 @@ impl App {
                 // The queue panel would cover the lyrics.
                 self.lyrics_open = false;
                 // Open on the playing song, a few rows below the top.
-                let y = (self.player.index.saturating_sub(2)) as f32 * ui::TRACK_ROW;
+                let y = (self.player.queue.index.saturating_sub(2)) as f32 * ui::TRACK_ROW;
                 scroll_to(
                     now_playing::QUEUE_SCROLL,
                     scrollable::AbsoluteOffset { x: 0.0, y },
@@ -818,7 +1005,10 @@ impl App {
                 Task::none()
             }
             Message::Dismiss => {
-                if self.queue_open {
+                if self.menu.is_some() {
+                    self.menu = None;
+                    Task::none()
+                } else if self.queue_open {
                     self.queue_open = false;
                     Task::none()
                 } else if self.lyrics_open && self.now_playing {
@@ -829,14 +1019,15 @@ impl App {
                 }
             }
             Message::Previous => {
-                if self.player.position > RESTART_AFTER || self.player.index == 0 {
+                if self.player.position > RESTART_AFTER || !self.player.queue.has_previous() {
                     if let Some(player) = &self.services.player {
                         player.seek(0.0);
                     }
                     self.player.position = 0.0;
                     Task::none()
                 } else {
-                    self.player.index -= 1;
+                    let index = self.player.queue.index - 1;
+                    self.player.queue.move_to(index);
                     self.start()
                 }
             }
@@ -858,7 +1049,11 @@ impl App {
                     && !self.player.starting
                 {
                     let failed = (self.services.player.as_ref()).is_some_and(|p| p.take_failed());
-                    let after = if failed { self.recover() } else { self.next() };
+                    let after = if failed {
+                        self.recover()
+                    } else {
+                        self.song_ended()
+                    };
                     Task::batch([saved, transition, after])
                 } else {
                     Task::batch([saved, transition])
@@ -949,6 +1144,7 @@ impl App {
         let song = self
             .player
             .queue
+            .songs
             .iter()
             .find(|song| song.video_id == *video_id)
             .cloned();
@@ -965,16 +1161,185 @@ impl App {
     }
 
     fn play(&mut self, songs: Arc<Vec<SongItem>>, index: usize) -> Task<Message> {
-        self.player.queue = songs;
-        self.player.index = index;
+        // A click in the queue panel moves within the queue, keeping shuffle
+        // and Play Next (Swift `moveQueueIndex`).
+        if Arc::ptr_eq(&songs, &self.player.queue.songs) {
+            self.player.queue.move_to(index);
+        } else {
+            self.player.queue.set(&songs, index);
+        }
         self.start()
+    }
+
+    /// Swift `NowPlaying.stopped` at the end of a song: repeat it, play the
+    /// next one, or continue with a radio of it (Autoplay Similar).
+    fn song_ended(&mut self) -> Task<Message> {
+        if self.player.queue.is_repeat_on {
+            return self.start();
+        }
+        if self.player.has_next() {
+            return self.next();
+        }
+        let Some(song) = self.player.song() else {
+            return Task::none();
+        };
+        let video_id = song.video_id.clone();
+        Task::perform(
+            self.services.clone().radio(video_id.clone()),
+            move |result| Message::AutoplayRadio(video_id, result),
+        )
+    }
+
+    fn menu_action(&mut self, action: song_menu::Action) -> Task<Message> {
+        use song_menu::Action;
+        let Some(mut menu) = self.menu.take() else {
+            return Task::none();
+        };
+        let song = menu.song.clone();
+        match action {
+            Action::PlayNext => {
+                self.player.queue.enqueue_next(song);
+                self.notify("Playing next")
+            }
+            Action::AddToQueue => {
+                self.player.queue.append(std::slice::from_ref(&song));
+                self.notify("Added to the queue")
+            }
+            Action::Like(liked) => self.like(song, liked),
+            Action::AddToPlaylist => {
+                menu.playlists = Some(None);
+                self.menu = Some(menu);
+                Task::perform(self.services.clone().playlists(), Message::MenuPlaylists)
+            }
+            Action::AddTo(playlist_id, name) => Task::perform(
+                self.services
+                    .clone()
+                    .add_to_playlist(playlist_id, song.video_id),
+                move |result| Message::AddedToPlaylist(name, result),
+            ),
+            Action::StartRadio => self.start_radio(song),
+            Action::GoTo(route) => {
+                self.queue_open = false;
+                self.now_playing = false;
+                self.update(Message::Navigate(route))
+            }
+            Action::CopyLink => Task::batch([
+                self.settings
+                    .update(settings::Message::CopyLink(song.video_id)),
+                self.notify("Song link copied"),
+            ]),
+            Action::Download => self.update_download(downloads::Msg::Start(Box::new(song))),
+            Action::RemoveFromQueue(index) => {
+                self.player.queue.remove(index);
+                Task::none()
+            }
+        }
+    }
+
+    /// Swift `LikeStore.toggle`: the heart changes at once and comes back if the account says no.
+    fn like(&mut self, song: SongItem, liked: bool) -> Task<Message> {
+        if liked {
+            self.liked.insert(song.video_id.clone());
+        } else {
+            self.liked.remove(&song.video_id);
+        }
+        let song = Box::new(song);
+        Task::perform(
+            self.services.clone().set_liked((*song).clone(), liked),
+            move |result| Message::Liked(song, liked, result),
+        )
+    }
+
+    fn load_likes(&self) -> Task<Message> {
+        Task::perform(self.services.clone().liked_ids(), Message::Likes)
+    }
+
+    /// Swift `PlaybackQueue.startRadio`: plays `song` unless it is playing,
+    /// then fills the queue with its radio.
+    fn start_radio(&mut self, song: SongItem) -> Task<Message> {
+        let video_id = song.video_id.clone();
+        let play = if self
+            .player
+            .song()
+            .is_some_and(|current| current.video_id == video_id)
+        {
+            Task::none()
+        } else {
+            self.player.queue.set(std::slice::from_ref(&song), 0);
+            self.start()
+        };
+        let radio = Task::perform(
+            self.services.clone().radio(video_id.clone()),
+            move |result| Message::Radio(video_id, result),
+        );
+        Task::batch([play, radio, self.notify("Starting radio…")])
+    }
+
+    fn radio_loaded(
+        &mut self,
+        video_id: String,
+        result: Result<(Vec<SongItem>, usize), String>,
+    ) -> Task<Message> {
+        let Some(current) = self
+            .player
+            .song()
+            .filter(|song| song.video_id == video_id)
+            .cloned()
+        else {
+            return Task::none();
+        };
+        let Ok((mut songs, _)) = result.inspect_err(|error| log::warn!("Radio failed: {error}"))
+        else {
+            return self.notify("The radio did not load.");
+        };
+        // The queue must stay on the song that plays.
+        let index = match songs.iter().position(|song| song.video_id == video_id) {
+            Some(found) => found,
+            None => {
+                songs.insert(0, current);
+                0
+            }
+        };
+        let added = songs.len().saturating_sub(index + 1);
+        self.player.queue.replace_with_radio(&songs, index);
+        self.notify(&format!("Radio: {added} songs up next"))
+    }
+
+    /// Shows `message` above the player bar for a few seconds.
+    fn notify(&mut self, message: &str) -> Task<Message> {
+        let id = self.notice.as_ref().map_or(0, |(id, _)| id + 1);
+        self.notice = Some((id, message.to_owned()));
+        Task::future(tokio::time::sleep(Duration::from_secs(3)))
+            .map(move |_| Message::ClearNotice(id))
+    }
+
+    fn save_defaults(&self) -> Task<Message> {
+        let defaults = PlayerDefaults {
+            repeat: self.player.queue.is_repeat_on,
+            volume: self
+                .services
+                .player
+                .as_ref()
+                .map_or(1.0, |player| player.volume()),
+        };
+        Task::future(async move {
+            let Some(path) = PlayerDefaults::default_path() else {
+                return;
+            };
+            let saved = tokio::task::spawn_blocking(move || defaults.save(&path)).await;
+            if let Ok(Err(error)) = saved {
+                log::warn!("Could not save the player settings: {error}");
+            }
+        })
+        .discard()
     }
 
     fn next(&mut self) -> Task<Message> {
         if !self.player.has_next() {
             return Task::none();
         }
-        self.player.index += 1;
+        let index = self.player.queue.index + 1;
+        self.player.queue.move_to(index);
         self.start()
     }
 
@@ -1065,10 +1430,7 @@ impl App {
         let player = &self.player;
         let np = NowPlayingState {
             video_id: player.song().map(|song| song.video_id.as_str()),
-            next_video_id: player
-                .queue
-                .get(player.index + 1)
-                .map(|song| song.video_id.as_str()),
+            next_video_id: player.queue.next_song().map(|song| song.video_id.as_str()),
             is_playing: player.state == PlayState::Playing,
             current_time: player.position,
             duration: player.duration,
@@ -1095,11 +1457,12 @@ impl App {
         else {
             return Task::none();
         };
-        let next = self.player.queue.get(self.player.index + 1);
+        let next = self.player.queue.next_song();
         if next.is_none_or(|song| song.video_id != promoted) {
             return Task::none();
         }
-        self.player.index += 1;
+        let index = self.player.queue.index + 1;
+        self.player.queue.move_to(index);
         self.player.starting = false;
         let changed = self.song_changed();
         self.read_player();
@@ -1150,7 +1513,7 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
-            window::resize_events().map(|_| Message::Resized),
+            window::resize_events().map(|(_, size)| Message::Resized(size)),
             keyboard::listen().filter_map(shortcut),
             media_controls::events(),
         ];
@@ -1213,8 +1576,8 @@ impl App {
             layers = layers.push(now_playing::queue(
                 &self.covers,
                 &self.queue_list,
-                &self.player.queue,
-                self.player.index,
+                &self.player.queue.songs,
+                self.player.queue.index,
             ));
         }
         let mut layers = layers
@@ -1225,10 +1588,18 @@ impl App {
             ))
             .width(Length::Fill)
             .height(Length::Fill);
+        if let Some((_, notice)) = &self.notice {
+            layers = layers.push(notice_view(notice));
+        }
+        if let Some(menu) = &self.menu {
+            let liked = self.liked.contains(&menu.song.video_id);
+            let account = matches!(self.session, Session::SignedIn(_));
+            layers = layers.push(song_menu::view(menu, liked, account, self.window));
+        }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
         }
-        layers.into()
+        song_menu::root(layers)
     }
 
     fn page(&self) -> Element<'_, Message> {
@@ -1327,7 +1698,46 @@ impl App {
             });
         let has_song = player.song().is_some();
         let playing = player.state == PlayState::Playing;
+        let toggle = |icon, message, on: bool| {
+            transport_button(icon, 20.0, has_song.then_some(message)).style(move |_, status| {
+                button::Style {
+                    background: (on || status == button::Status::Hovered)
+                        .then_some(Background::Color(theme::PRESSED)),
+                    border: Border::default().rounded(22),
+                    ..button::Style::default()
+                }
+            })
+        };
+        // Like needs an account (Swift hides it for guests too).
+        let heart: Element<'_, Message> = match player.song() {
+            Some(song) if matches!(self.session, Session::SignedIn(_)) => {
+                let liked = self.liked.contains(&song.video_id);
+                let icon = if liked {
+                    song_menu::icons::HEART_FILL
+                } else {
+                    song_menu::icons::HEART
+                };
+                transport_button(
+                    icon,
+                    20.0,
+                    Some(Message::Like(Box::new(song.clone()), !liked)),
+                )
+                .style(|_, status| button::Style {
+                    background: (status == button::Status::Hovered)
+                        .then_some(Background::Color(theme::HOVER)),
+                    border: Border::default().rounded(22),
+                    ..button::Style::default()
+                })
+                .into()
+            }
+            _ => Space::new().into(),
+        };
         let transport = row![
+            toggle(
+                song_menu::icons::SHUFFLE,
+                Message::Shuffle,
+                player.queue.is_shuffle_on
+            ),
             transport_button(icons::PREVIOUS, 22.0, has_song.then_some(Message::Previous)),
             transport_button(
                 if playing { icons::PAUSE } else { icons::PLAY },
@@ -1339,8 +1749,13 @@ impl App {
                 22.0,
                 player.has_next().then_some(Message::Next)
             ),
+            toggle(
+                song_menu::icons::REPEAT,
+                Message::Repeat,
+                player.queue.is_repeat_on
+            ),
         ]
-        .spacing(12)
+        .spacing(10)
         .align_y(Alignment::Center);
         let position = player.seeking.unwrap_or(player.position);
         let time = |seconds: f64| {
@@ -1364,16 +1779,6 @@ impl App {
         } else {
             Space::new().width(Length::Fill).into()
         };
-        let toggle = |icon, message, on: bool| {
-            transport_button(icon, 20.0, has_song.then_some(message)).style(move |_, status| {
-                button::Style {
-                    background: (on || status == button::Status::Hovered)
-                        .then_some(Background::Color(theme::PRESSED)),
-                    border: Border::default().rounded(22),
-                    ..button::Style::default()
-                }
-            })
-        };
         let lyrics = toggle(icons::LYRICS, Message::ToggleLyrics, self.showing_lyrics());
         let queue = toggle(icons::QUEUE, Message::ToggleQueue, self.queue_open);
         let download: Element<'_, Message> = match player.song() {
@@ -1383,15 +1788,58 @@ impl App {
         let link = self
             .settings
             .copy_link_button(player.song().map(|song| song.video_id.as_str()));
+        let volume = self
+            .services
+            .player
+            .as_ref()
+            .map_or(1.0, |player| player.volume());
+        let volume = row![
+            ui::icon(
+                if volume > 0.0 {
+                    song_menu::icons::VOLUME
+                } else {
+                    song_menu::icons::MUTED
+                },
+                18.0
+            )
+            .style(|_, _| svg::Style {
+                color: Some(theme::SECONDARY)
+            }),
+            slider(0.0..=1.0, volume, Message::Volume)
+                .on_release(Message::SaveDefaults)
+                .step(0.01)
+                .width(84)
+                .style(seek_style),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        let more = transport_button(
+            song_menu::icons::MORE,
+            20.0,
+            has_song.then_some(Message::MoreMenu),
+        )
+        .style(|_, status| button::Style {
+            background: (status == button::Status::Hovered)
+                .then_some(Background::Color(theme::PRESSED)),
+            border: Border::default().rounded(22),
+            ..button::Style::default()
+        });
         let content = row![
-            container(now_playing).width(Length::FillPortion(1)),
+            row![container(now_playing).width(Length::Shrink), heart]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .width(Length::FillPortion(1)),
             // Transport takes its own width, so the seek slider gets the rest
             // of a narrow window; equal sides keep it centred.
             transport,
-            row![seek, row![download, lyrics, queue, link].spacing(4)]
-                .spacing(14)
-                .align_y(Alignment::Center)
-                .width(Length::FillPortion(1)),
+            row![
+                seek,
+                row![download, lyrics, queue, link, more].spacing(4),
+                volume
+            ]
+            .spacing(14)
+            .align_y(Alignment::Center)
+            .width(Length::FillPortion(1)),
         ]
         .spacing(16)
         .padding([0, 14])
@@ -1623,6 +2071,28 @@ fn snapshot_task() -> Task<Message> {
 }
 
 /// Round icon button of the player bar; dimmed when there is nothing to do.
+/// A short message centred above the player bar.
+fn notice_view(notice: &str) -> Element<'_, Message> {
+    container(
+        container(text(notice).size(14).font(theme::weight(Weight::Medium)))
+            .padding([8, 16])
+            .style(|_| container::Style {
+                background: Some(Background::Color(Color::from_rgba(0.11, 0.11, 0.12, 0.94))),
+                border: Border::default().rounded(18),
+                text_color: Some(theme::TEXT),
+                ..container::Style::default()
+            }),
+    )
+    .center_x(Length::Fill)
+    .align_bottom(Length::Fill)
+    .padding(Padding {
+        bottom: theme::PLAYER_HEIGHT + 2.0 * theme::INSET + 8.0,
+        left: theme::SIDEBAR_WIDTH + theme::INSET,
+        ..Padding::ZERO
+    })
+    .into()
+}
+
 fn transport_button<'a>(
     glyph: &'static [u8],
     size: f32,

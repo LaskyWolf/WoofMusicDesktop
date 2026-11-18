@@ -73,6 +73,12 @@ enum Command {
     Tick(Option<Box<Now>>),
     Request(Action, Reply),
     LastFmSignedIn(Result<(), String>, Reply),
+    /// Swift `LikeStore.toggle`: a like loves the track on Last.fm.
+    Love {
+        artist: String,
+        track: String,
+        love: bool,
+    },
 }
 
 /// The player at one tick.
@@ -113,6 +119,25 @@ pub fn tick(player: &Player) {
         })
     });
     let _ = COMMANDS.unbounded_send(Command::Tick(now));
+}
+
+/// Loves or un-loves `song` on Last.fm, when it is connected.
+pub fn love(song: &SongItem, love: bool) {
+    let artist = song
+        .artists
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if artist.is_empty() || song.title.is_empty() {
+        return;
+    }
+    let track = song.title.clone();
+    let _ = COMMANDS.unbounded_send(Command::Love {
+        artist,
+        track,
+        love,
+    });
 }
 
 pub async fn request(action: Action) -> Result<Status, String> {
@@ -202,6 +227,13 @@ impl Worker {
                 let result = self.apply(action).await;
                 // The receiver is gone if Settings stopped waiting: nothing to do.
                 let _ = reply.send(result.map(|()| self.status()));
+            }
+            Command::Love {
+                artist,
+                track,
+                love,
+            } => {
+                self.last_fm.handle_love(&artist, &track, love).await;
             }
             Command::LastFmSignedIn(result, reply) => {
                 let result = result.and_then(|()| {

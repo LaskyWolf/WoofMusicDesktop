@@ -282,7 +282,13 @@ async fn fade(shared: &Shared, plan: &Plan, outgoing: &MpvDeck, incoming: &MpvDe
     loop {
         let t = crossfade::fade_progress(start.elapsed().as_secs_f64(), plan.mix.fade_length);
         let (out_gain, in_gain) = crossfade::fade_gains(t);
-        set_volumes(outgoing, incoming, out_gain, in_gain);
+        set_volumes(
+            outgoing,
+            incoming,
+            out_gain,
+            in_gain,
+            shared.player.volume(),
+        );
         // Halfway the next song becomes the one on screen.
         if t >= 0.5 {
             promote_now(shared, plan);
@@ -330,6 +336,7 @@ async fn beat_mix(
             incoming,
             step.outgoing_volume,
             step.incoming_volume,
+            player.volume(),
         );
         apply(&step.effects, outgoing, incoming);
         if let Some(speed) = step.speed {
@@ -388,13 +395,13 @@ async fn ease_speed(deck: MpvDeck, from: f64) {
 fn settle(player: &PlayerController, active: bool) {
     if let Some(spare) = player.spare() {
         let _ = spare.set("pause", "yes");
-        let _ = spare.set("volume", "100");
+        let _ = spare.set("volume", &crossfade::fmt(100.0 * player.volume()));
         let _ = spare.set("speed", "1");
         clear_effects(player, &spare);
     }
     if active {
         let deck = player.active_deck();
-        let _ = deck.set("volume", "100");
+        let _ = deck.set("volume", &crossfade::fmt(100.0 * player.volume()));
         clear_effects(player, &deck);
     }
     player.set_crossfading(false);
@@ -422,7 +429,10 @@ fn apply(effects: &[Effect], outgoing: &MpvDeck, incoming: &MpvDeck) {
     }
 }
 
-fn set_volumes(outgoing: &MpvDeck, incoming: &MpvDeck, out_gain: f64, in_gain: f64) {
-    let _ = outgoing.set("volume", &crossfade::mpv_volume(out_gain));
-    let _ = incoming.set("volume", &crossfade::mpv_volume(in_gain));
+/// `master` is the volume slider: mpv's volume is cubic, so it scales the
+/// linear gains by its cube.
+fn set_volumes(outgoing: &MpvDeck, incoming: &MpvDeck, out_gain: f64, in_gain: f64, master: f64) {
+    let master = master.powi(3);
+    let _ = outgoing.set("volume", &crossfade::mpv_volume(out_gain * master));
+    let _ = incoming.set("volume", &crossfade::mpv_volume(in_gain * master));
 }

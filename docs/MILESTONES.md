@@ -68,9 +68,11 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Downloads for offline play
 - [x] Media keys and system media panel: MPRIS on Linux, SMTC on Windows (`playwire`)
 - [x] Discord presence (local IPC), Last.fm and ListenBrainz scrobbling, Odesli song links; Settings page
-- [ ] Everyday controls: volume (`PlayerVolumeSlider`), shuffle and repeat (`PlaybackQueue`), like button (`LikeStore`, `LikeFlavor`)
-- [ ] Song menu: play next, add to queue, add to playlist, go to album or artist, share, start radio (`SongActionsMenu`, `RadioOptions`)
-- [ ] Queue editing: reorder, remove (`QueueView`)
+- [x] Everyday controls: volume (`PlayerVolumeSlider`), shuffle and repeat (`PlaybackQueue`), like button (`LikeStore`, `LikeFlavor`)
+- [x] Song menu: play next, add to queue, add to playlist, go to album or artist, share, start radio (`SongActionsMenu`)
+- [ ] Radio options (style, length, explicit) and New Playlist in Add to Playlist (`RadioOptions`, `RadioViews`)
+- [ ] Restore the queue and the playing song at launch (`NowPlaying.restoreQueueIfNeeded`)
+- [ ] Queue editing: drag to reorder; remove is in the song menu (`QueueView`)
 - [ ] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
 - [ ] History page and play reports to YouTube Music history (`History/`, `YouTubeHistoryReport`)
 - [ ] Activity: new releases from followed artists (`Activity/`)

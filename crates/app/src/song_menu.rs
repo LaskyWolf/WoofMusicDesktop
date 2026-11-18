@@ -1,0 +1,345 @@
+//! The song menu (Swift `SongActionsMenu`): right-click a song, or the
+//! player bar's More button, to get Play Next, Add to Queue, Like, Add to
+//! Playlist, Start Radio, Go To and Share.
+
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::widget::{self, Tree, Widget};
+use iced::advanced::{Clipboard, Shell, mouse, overlay, renderer};
+use iced::font::Weight;
+use iced::widget::{Space, button, column, container, mouse_area, row, scrollable, svg, text};
+use iced::{
+    Alignment, Background, Border, Element, Event, Length, Padding, Point, Rectangle, Size, Vector,
+};
+use trop::database::entities::playlist_entity::PlaylistEntity;
+use trop::networking::models::yt_item::SongItem;
+
+use crate::{Message, Route, theme, ui};
+
+const WIDTH: f32 = 232.0;
+const ITEM: f32 = 36.0;
+const PAD: f32 = 6.0;
+/// The glass shader's id for the menu panel (1–3 are the sidebar, player bar and queue).
+const GLASS: u64 = 4;
+
+/// An open menu.
+pub struct Menu {
+    pub song: SongItem,
+    /// Window position of the click; the menu opens there.
+    pub at: Point,
+    /// The song's place in the queue, when the menu came from the queue panel.
+    pub queue_index: Option<usize>,
+    /// `Some` once Add to Playlist was picked: the playlists, `None` while they load.
+    pub playlists: Option<Option<Vec<PlaylistEntity>>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Action {
+    PlayNext,
+    AddToQueue,
+    Like(bool),
+    AddToPlaylist,
+    AddTo(String, String),
+    StartRadio,
+    GoTo(Route),
+    CopyLink,
+    Download,
+    RemoveFromQueue(usize),
+}
+
+/// The menu over the whole window: a click outside closes it.
+/// `account` is false for a guest: Like and Add to Playlist need an account.
+pub fn view<'a>(menu: &'a Menu, liked: bool, account: bool, window: Size) -> Element<'a, Message> {
+    let items: Vec<Element<'a, Message>> = match &menu.playlists {
+        None => actions(menu, liked, account),
+        Some(None) => vec![note("Loading playlists…")],
+        Some(Some(list)) if list.is_empty() => vec![note("No playlists yet")],
+        Some(Some(list)) => list
+            .iter()
+            .map(|playlist| {
+                item(
+                    icons::PLAYLIST,
+                    &playlist.name,
+                    Action::AddTo(playlist.id.clone(), playlist.name.clone()),
+                )
+            })
+            .collect(),
+    };
+    let rows = items.len() as f32;
+    let height = (rows * ITEM + 2.0 * PAD).min(window.height - 2.0 * theme::INSET);
+    let list = scrollable(column(items).padding(PAD)).direction(scrollable::Direction::Vertical(
+        scrollable::Scrollbar::hidden(),
+    ));
+    let panel = ui::glass_panel(
+        GLASS,
+        14.0,
+        Length::Fixed(WIDTH),
+        Length::Fixed(height),
+        list,
+    );
+    // Below and right of the cursor, flipped where the window ends.
+    let x = menu
+        .at
+        .x
+        .min(window.width - WIDTH - theme::INSET)
+        .max(theme::INSET);
+    let y = if menu.at.y + height > window.height - theme::INSET {
+        (menu.at.y - height).max(theme::INSET)
+    } else {
+        menu.at.y
+    };
+    let backdrop = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+        .on_press(Message::CloseMenu)
+        .on_right_press(Message::CloseMenu);
+    iced::widget::stack![
+        backdrop,
+        container(panel).padding(Padding {
+            top: y,
+            left: x,
+            ..Padding::ZERO
+        }),
+    ]
+    .into()
+}
+
+fn actions(menu: &Menu, liked: bool, account: bool) -> Vec<Element<'_, Message>> {
+    let song = &menu.song;
+    let mut items = vec![
+        item(icons::PLAY_NEXT, "Play Next", Action::PlayNext),
+        item(icons::ADD_QUEUE, "Add to Queue", Action::AddToQueue),
+    ];
+    if account {
+        items.push(if liked {
+            item(icons::HEART_FILL, "Unlike", Action::Like(false))
+        } else {
+            item(icons::HEART, "Like", Action::Like(true))
+        });
+        items.push(item(
+            icons::PLAYLIST,
+            "Add to Playlist…",
+            Action::AddToPlaylist,
+        ));
+    }
+    items.push(item(icons::RADIO, "Start Radio", Action::StartRadio));
+    if let Some(id) = song.album_id.clone() {
+        items.push(item(
+            icons::ALBUM,
+            "Go to Album",
+            Action::GoTo(Route::Album(id)),
+        ));
+    }
+    if let Some(id) = song.artists.iter().find_map(|artist| artist.id.clone()) {
+        items.push(item(
+            icons::ARTIST,
+            "Go to Artist",
+            Action::GoTo(Route::Artist(id)),
+        ));
+    }
+    items.push(item(icons::DOWNLOAD, "Download", Action::Download));
+    items.push(item(icons::LINK, "Copy Song Link", Action::CopyLink));
+    if let Some(index) = menu.queue_index {
+        items.push(item(
+            icons::REMOVE,
+            "Remove from Queue",
+            Action::RemoveFromQueue(index),
+        ));
+    }
+    items
+}
+
+fn item<'a>(icon: &'static [u8], label: &str, action: Action) -> Element<'a, Message> {
+    let content = row![
+        ui::icon(icon, 18.0).style(|_, _| svg::Style {
+            color: Some(theme::SECONDARY)
+        }),
+        text(ui::fit(label, WIDTH - 60.0, 14.0))
+            .size(14)
+            .font(theme::weight(Weight::Medium))
+            .wrapping(text::Wrapping::None),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+    button(container(content).center_y(ITEM).padding([0, 10]))
+        .width(Length::Fill)
+        .padding(0)
+        .on_press(Message::MenuAction(action))
+        .style(|_, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then_some(Background::Color(theme::PRESSED)),
+            border: Border::default().rounded(8),
+            text_color: theme::TEXT,
+            ..button::Style::default()
+        })
+        .into()
+}
+
+fn note<'a>(label: &'a str) -> Element<'a, Message> {
+    container(text(label).size(14).color(theme::SECONDARY))
+        .center_y(ITEM)
+        .padding([0, 10])
+        .into()
+}
+
+/// Right-click on a song opens its menu: `Message::SongMenu`.
+pub fn on_right_click<'a>(
+    content: impl Into<Element<'a, Message>>,
+    song: &SongItem,
+    queue_index: Option<usize>,
+) -> Element<'a, Message> {
+    mouse_area(content)
+        .on_right_press(Message::SongMenu(Box::new(song.clone()), queue_index))
+        .into()
+}
+
+/// Wraps the whole window: on a right-click it sends where the cursor is in
+/// the window (`Message::RightClickAt`), before the song under it sends
+/// `SongMenu`. Inside a scrollable the cursor is in content coordinates, so
+/// only the root knows the window position.
+pub fn root<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(Root {
+        content: content.into(),
+    })
+}
+
+struct Root<'a> {
+    content: Element<'a, Message>,
+}
+
+impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.content)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        if let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) = event
+            && let Some(at) = cursor.position()
+        {
+            shell.publish(Message::RightClickAt(at));
+        }
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        self.content.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, iced::Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+/// Outline icons in the app's 2 px stroke; `ui::icon` tints them.
+pub mod icons {
+    pub const PLAY_NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M4 11h10M4 16h6"/><path d="M15 14l4 3-4 3z" fill="#fff"/></g></svg>"##;
+    pub const ADD_QUEUE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h12M4 11h12M4 16h7M17 14v6M14 17h6"/></g></svg>"##;
+    pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 19.5s-7-4.3-8.6-8.5C2.2 7.9 4.1 5 7.2 5c2 0 3.4 1 4.8 2.8C13.4 6 14.8 5 16.8 5c3.1 0 5 2.9 3.8 6-1.6 4.2-8.6 8.5-8.6 8.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>"##;
+    pub const HEART_FILL: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 19.5s-7-4.3-8.6-8.5C2.2 7.9 4.1 5 7.2 5c2 0 3.4 1 4.8 2.8C13.4 6 14.8 5 16.8 5c3.1 0 5 2.9 3.8 6-1.6 4.2-8.6 8.5-8.6 8.5z" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>"##;
+    pub const PLAYLIST: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h11M4 11h11M4 16h6"/><circle cx="16.5" cy="17" r="2.5"/><path d="M19 17V9l2-1"/></g></svg>"##;
+    pub const RADIO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></g></svg>"##;
+    pub const ALBUM: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/></g></svg>"##;
+    pub const ARTIST: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></g></svg>"##;
+    pub const DOWNLOAD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></g></svg>"##;
+    pub const LINK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></g></svg>"##;
+    pub const REMOVE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/></g></svg>"##;
+    pub const MORE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="#fff"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></g></svg>"##;
+    pub const SHUFFLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H21M3 17h3.5c1.4 0 2.4-.5 3.2-1.4M13.3 8.4C14.1 7.5 15.1 7 16.5 7H21M18 4l3 3-3 3M18 14l3 3-3 3"/></g></svg>"##;
+    pub const REPEAT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11V9.5A2.5 2.5 0 0 1 6.5 7H19M16 4l3 3-3 3M20 13v1.5a2.5 2.5 0 0 1-2.5 2.5H5M8 20l-3-3 3-3"/></g></svg>"##;
+    pub const VOLUME: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9.5v5a1 1 0 0 0 1 1h3l4.3 3.6a.6.6 0 0 0 1-.5V5.4a.6.6 0 0 0-1-.5L8 8.5H5a1 1 0 0 0-1 1z" fill="#fff"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>"##;
+    pub const MUTED: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9.5v5a1 1 0 0 0 1 1h3l4.3 3.6a.6.6 0 0 0 1-.5V5.4a.6.6 0 0 0-1-.5L8 8.5H5a1 1 0 0 0-1 1z" fill="#fff"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>"##;
+}

@@ -157,7 +157,7 @@ pub fn tile<'a>(
     .spacing(4)
     .width(TILE)
     .clip(true);
-    clickable(content, open(item, songs), 6.0)
+    song_menu(item, clickable(content, open(item, songs), 6.0))
 }
 
 /// Song in a songs-only section (Quick picks): a compact cell.
@@ -186,7 +186,7 @@ pub fn song_cell<'a>(
     .spacing(12)
     .align_y(Alignment::Center)
     .width(300);
-    clickable(content, open(item, songs), 8.0)
+    song_menu(item, clickable(content, open(item, songs), 8.0))
 }
 
 /// Teal for the playing song's title, white otherwise.
@@ -199,7 +199,8 @@ pub const TRACK_ROW: f32 = 52.0;
 
 /// Full-width track row of an album, playlist or the queue: number or cover,
 /// title, `subtitle` (usually the artists), length. `playing` highlights the
-/// current song. `text_width` shortens the text to fit a narrow column.
+/// current song. `queue` is the text width in the queue panel's narrow
+/// column; the song menu then offers Remove from Queue.
 pub fn track_row<'a>(
     covers: &'a Covers,
     songs: &Arc<Vec<SongItem>>,
@@ -207,11 +208,11 @@ pub fn track_row<'a>(
     show_cover: bool,
     playing: bool,
     subtitle: String,
-    text_width: Option<f32>,
+    queue: Option<f32>,
 ) -> Element<'a, Message> {
     let song = &songs[index];
     // In a narrow column the text ends with an ellipsis instead of a cut glyph.
-    let (title, subtitle) = match text_width {
+    let (title, subtitle) = match queue {
         Some(width) => (fit(&song.title, width, 14.0), fit(&subtitle, width, 13.0)),
         None => (song.title.clone(), subtitle),
     };
@@ -254,11 +255,23 @@ pub fn track_row<'a>(
     .spacing(14)
     .align_y(Alignment::Center)
     .height(TRACK_ROW);
-    clickable(
-        container(content).padding([0, 8]),
-        Some(Message::PlayQueue(songs.clone(), index)),
-        0.0,
+    crate::song_menu::on_right_click(
+        clickable(
+            container(content).padding([0, 8]),
+            Some(Message::PlayQueue(songs.clone(), index)),
+            0.0,
+        ),
+        song,
+        queue.map(|_| index),
     )
+}
+
+/// A song item opens its menu on right-click; other items are left as they are.
+fn song_menu<'a>(item: &YTItem, element: Element<'a, Message>) -> Element<'a, Message> {
+    match item {
+        YTItem::Song(song) => crate::song_menu::on_right_click(element, song, None),
+        _ => element,
+    }
 }
 
 /// Big header of a detail page: cover, title, subtitle lines, play button.
