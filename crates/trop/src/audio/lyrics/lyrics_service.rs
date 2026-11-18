@@ -520,7 +520,24 @@ impl LyricsService {
             "radio",
         ];
         let lower = name.to_lowercase();
-        !lower.is_empty() && CHANNEL_WORDS.iter().any(|w| lower.contains(w))
+        // A long word glued to the end still counts: "AdeleVEVO", "SomeMusic".
+        !lower.is_empty()
+            && CHANNEL_WORDS.iter().any(|w| {
+                Self::find_word(&lower, w).is_some()
+                    || (w.chars().count() >= 4 && lower.ends_with(w))
+            })
+    }
+
+    /// Byte offset of `marker` in `text`, skipping matches inside a longer
+    /// ASCII word: "mv" is found in "Song MV" but not "radio" in "Radiohead".
+    fn find_word(text: &str, marker: &str) -> Option<usize> {
+        let is_word = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+        text.match_indices(marker).map(|(at, _)| at).find(|&at| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + marker.len()..].chars().next();
+            !(is_word(marker.chars().next()) && is_word(before))
+                && !(is_word(marker.chars().next_back()) && is_word(after))
+        })
     }
 
     fn clean_title(raw: &str) -> String {
@@ -532,7 +549,7 @@ impl LyricsService {
         for marker in [
             "|", "♪", "mv", "lyrics", "歌词", "動態", "动态", "official", "官方",
         ] {
-            if let Some(at) = lower.find(marker) {
+            if let Some(at) = Self::find_word(&lower, marker) {
                 s.truncate(at);
                 break;
             }
@@ -546,11 +563,8 @@ impl LyricsService {
             .filter(|part| !part.is_empty())
             .map(|part| {
                 let p = part.split_once(" - ").map_or(part, |(left, _)| left);
-                p.replace(" - Topic", "")
-                    .replace("-Topic", "")
-                    .replace("Topic", "")
-                    .trim()
-                    .to_string()
+                // " - Topic" is already cut above; an artist named "Topic" stays.
+                p.strip_suffix("-Topic").unwrap_or(p).trim().to_string()
             })
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()

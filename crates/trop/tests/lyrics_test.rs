@@ -802,6 +802,35 @@ fn query_cleaning_splits_channel_uploads_and_strips_extras() {
     );
 }
 
+#[test]
+fn query_matches_channel_words_only_as_whole_words() {
+    let query = |title: &str, artist: &str| {
+        let q = LyricsService::resolve_query(&LyricsSong {
+            title: title.into(),
+            artist: artist.into(),
+            ..song()
+        })
+        .unwrap();
+        (q.title, q.artist)
+    };
+    let pair = |title: &str, artist: &str| (title.to_string(), artist.to_string());
+    assert_eq!(
+        query("Officially Missing You", "Tamia"),
+        pair("Officially Missing You", "Tamia")
+    );
+    assert_eq!(
+        query("Paranoid Android - Remastered", "Radiohead"),
+        pair("Paranoid Android - Remastered", "Radiohead")
+    );
+    assert_eq!(
+        query("Feel It Still - Lido Remix", "Portugal. The Man"),
+        pair("Feel It Still - Lido Remix", "Portugal. The Man")
+    );
+    assert_eq!(query("Breaking Me", "Topic"), pair("Breaking Me", "Topic"));
+    assert_eq!(query("Adele - Hello", "AdeleVEVO"), pair("Hello", "Adele"));
+    assert_eq!(query("Hello", "Adele-Topic"), pair("Hello", "Adele"));
+}
+
 // Line lookup.
 
 #[test]
