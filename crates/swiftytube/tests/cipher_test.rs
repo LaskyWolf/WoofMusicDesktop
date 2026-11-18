@@ -207,3 +207,42 @@ fn bot_guard_parses_integrity_tokens_and_descrambles() {
     // "AQI=" decodes to [1, 2]; +97 gives "bc".
     assert_eq!(BotGuardService::descramble("AQI."), "bc");
 }
+
+#[tokio::test]
+async fn player_js_error_page_is_neither_returned_nor_cached() {
+    let dir = std::env::temp_dir().join(format!("swiftytube-error-page-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let session = Session::mock(|request| {
+        let path = request.url().path().to_string();
+        let (status, data) = if path == "/iframe_api" {
+            (
+                200,
+                br#"var u="https:\/\/www.youtube.com\/s\/player\/abcd1234\/www-widgetapi.vflset";"#
+                    .to_vec(),
+            )
+        } else if path.ends_with("/base.js") {
+            (429, b"<html><body>Too Many Requests</body></html>".to_vec())
+        } else {
+            (404, Vec::new())
+        };
+        HttpResponse {
+            status,
+            data,
+            ..HttpResponse::default()
+        }
+    });
+    let store = Arc::new(PlayerConfigStore::new(
+        None,
+        session.clone(),
+        Some(dir.clone()),
+    ));
+    let fetcher = PlayerJsFetcher::new(Some(dir.clone()), session, store);
+    let result = fetcher.get_player_js().await;
+    let cached = dir.join("player_abcd1234.js").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        result.is_err(),
+        "error page returned as player.js: {result:?}"
+    );
+    assert!(!cached);
+}

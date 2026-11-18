@@ -106,8 +106,9 @@ impl PlayerJsFetcher {
     }
 
     async fn get_text(&self, url: &str, what: &str) -> Result<String, CipherError> {
-        let url = url.parse().expect("valid URL");
-        let response = HttpClient::data_from(url, &self.session)
+        let request = reqwest::Request::new(reqwest::Method::GET, url.parse().expect("valid URL"));
+        // A non-2xx body is an error page; cached as player.js it breaks the cipher for hours.
+        let response = HttpClient::validated_data(request, &self.session)
             .await
             .map_err(|error| CipherError::InvalidResponse(format!("{what}: {error}")))?;
         String::from_utf8(response.data)
