@@ -1,7 +1,8 @@
-// SwiftyTube/Sync/PlaylistDetailService.swift: the page walk that reads a
-// playlist's rows. `fetchPlaylist` (saves rows in the sync store) comes with
-// R5, as does `fetchPlaylistRows`' `onPage` progress callback (no caller yet).
+// SwiftyTube/Sync/PlaylistDetailService.swift.
+// `fetchPlaylistRows`' `onPage` progress callback is not ported (no caller yet).
 // `dumpDiagnosticJSON` is not ported; the diagnostic line is still logged.
+// Swift keeps the store in the actor; here `fetch_playlist` takes it, so
+// `new(client)` stays the only constructor.
 
 use std::collections::HashSet;
 
@@ -15,6 +16,11 @@ use crate::networking::inner_tube_json::InnerTubeJSON;
 use serde_json::Value;
 
 use super::browse_lens::BrowseLens;
+use super::library_browse_parser::LibraryBrowseParser;
+use super::library_sync_models::{
+    SongMergeArgs, SyncError, SyncPlaylist, SyncPlaylistEntry, SyncSong,
+};
+use super::library_sync_store::LibrarySyncStore;
 
 /// All raw track rows of a playlist, plus the first page for header parsing.
 #[derive(Clone, Debug, Default)]
@@ -30,6 +36,79 @@ pub struct PlaylistDetailService<'a> {
 impl<'a> PlaylistDetailService<'a> {
     pub fn new(client: &'a InnerTubeClient) -> Self {
         Self { client }
+    }
+
+    /// Saves a playlist's rows in `store`: the playlist row (merged over the
+    /// stored one), its songs, and its song mappings in shelf order. Returns
+    /// the row count. Swift defaults: `max_pages: 100`, `throw_on_truncation: false`.
+    pub async fn fetch_playlist(
+        &self,
+        store: &dyn LibrarySyncStore,
+        playlist_id: &str,
+        max_pages: usize,
+        throw_on_truncation: bool,
+    ) -> Result<usize, SyncError> {
+        let snapshot = self
+            .fetch_playlist_rows(playlist_id, max_pages, throw_on_truncation)
+            .await?
+            .rows;
+        let browse_id = Self::request_browse_id(playlist_id);
+        let existing = store.fetch_playlist(playlist_id)?;
+        let entity = SyncPlaylist::merging(
+            existing.as_ref(),
+            playlist_id,
+            Some(&browse_id),
+            "Playlist",
+            snapshot.len() as i64,
+        );
+        store.save_playlist(&entity)?;
+
+        // Clear existing song mappings and re-insert.
+        store.delete_maps_for_playlist(playlist_id)?;
+        let mut skipped = 0;
+        for (index, raw_item) in snapshot.iter().enumerate() {
+            let Some(renderer) = as_dict(raw_item.get("musicResponsiveListItemRenderer")) else {
+                skipped += 1;
+                continue;
+            };
+            let Some(video_id) = Self::playlist_row_video_id(renderer) else {
+                skipped += 1;
+                continue;
+            };
+            let set_video_id = InnerTubeDecode::string(
+                &["navigationEndpoint", "watchEndpoint", "playlistSetVideoId"],
+                renderer,
+            );
+            if let Some(song_item) = LibraryBrowseParser::parse_song(raw_item) {
+                let existing = store.fetch_song(video_id)?;
+                let entity = SyncSong::merging(
+                    existing.as_ref(),
+                    SongMergeArgs {
+                        id: video_id.to_string(),
+                        title: song_item.title,
+                        artist_name: song_item.artists.into_iter().next(),
+                        album_name: song_item.album,
+                        duration: song_item.duration,
+                        thumbnail_url: song_item.thumbnail_url,
+                        ..SongMergeArgs::default()
+                    },
+                );
+                store.save_song(&entity)?;
+            }
+            store.insert_map_ignoring_conflicts(&SyncPlaylistEntry {
+                playlist_id: playlist_id.to_string(),
+                song_id: video_id.to_string(),
+                position: index as i64,
+                set_video_id: set_video_id.map(str::to_string),
+            })?;
+        }
+        if skipped > 0 {
+            SwiftyTubeLog::debug(&format!(
+                "fetchPlaylist {playlist_id}: skipped {skipped}/{} rows without video id",
+                snapshot.len()
+            ));
+        }
+        Ok(snapshot.len())
     }
 
     /// All raw track rows across every page, plus the first page's JSON for
@@ -204,6 +283,25 @@ impl<'a> PlaylistDetailService<'a> {
         } else {
             format!("VL{playlist_id}")
         }
+    }
+
+    fn playlist_row_video_id(renderer: &JsonDict) -> Option<&str> {
+        [
+            &["videoId"][..],
+            &["playlistItemData", "videoId"],
+            &["navigationEndpoint", "watchEndpoint", "videoId"],
+            &[
+                "overlay",
+                "musicItemThumbnailOverlayRenderer",
+                "content",
+                "musicPlayButtonRenderer",
+                "playNavigationEndpoint",
+                "watchEndpoint",
+                "videoId",
+            ],
+        ]
+        .into_iter()
+        .find_map(|path| InnerTubeDecode::string(path, renderer).filter(|id| !id.is_empty()))
     }
 
     pub fn extract_playlist_items(json: &JsonDict) -> Option<Vec<&JsonDict>> {

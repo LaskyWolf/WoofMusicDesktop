@@ -40,18 +40,25 @@ Rust translation of [SwiftyTube](https://github.com/686udjie/SwiftyTube), the Yo
 | `Notification.Name.durationDidUpdate` | not ported yet (R4, when a screen listens) |
 | `removingPercentEncoding`, `.urlQueryAllowed` | `percent-encoding` crate |
 | `Data(base64Encoded:)` | `base64` crate |
+| `protocol LibrarySyncStore` (`async throws`) | sync trait `LibrarySyncStore` (`&self`, `Result<_, StoreError>`): it does no network I/O |
+| Trop's GRDB `LibrarySyncStore` | `JsonLibrarySyncStore`: one JSON file, `$XDG_DATA_HOME` (or `~/.local/share`) / `%APPDATA%`, then `WoofMusic/library.json` |
+| `UserDefaults` in `IncrementalSyncService` | a JSON object file, `WoofMusic/sync_defaults.json` in the same data directory |
+| `Date` in sync models | `std::time::SystemTime` |
+| `MutationError`, `NSError` and `any Error` thrown by sync services | `SyncError` |
+| `actor` sync services | `&self` methods; `MutationService`'s orphan-repair state behind a `Mutex` never held across `.await` |
+| `onLikesRefresh: (() async -> Void)?` | `impl Future<Output = ()>`; pass `async {}` for none |
+| `PlaylistDetailService(client:store:)` | `PlaylistDetailService::new(client)`; `fetch_playlist` takes the store |
 
 `SecureAuthStore` (in `secure_store.rs`) is not in Swift: it stores one JSON `AuthState` and implements `AuthStateProvider`, as the Dart translation did.
 
 ## Status
 
-Translated: `Core/`, `Networking/`, `Formatting/`, `Streaming/`, `Cipher/`, `PoToken/`, and from `Auth/`: `AccountInfo`, `AuthState`, `AuthStateProvider`, `CookieParser`, `SAPISIDAuth`, `SecureStore`, `SessionImporter`.
+Translated: `Core/`, `Networking/`, `Formatting/`, `Streaming/`, `Cipher/`, `PoToken/`, `Sync/`, and from `Auth/`: `AccountInfo`, `AuthState`, `AuthStateProvider`, `CookieParser`, `SAPISIDAuth`, `SecureStore`, `SessionImporter`.
 
 Not yet, each in its own folder when its milestone starts:
 
 | Folder / file | Milestone |
 | --- | --- |
-| `Sync/`, `InnerTubeClient.verifySession` (needs `Sync/BrowseLens`) | R5 |
 | `Auth/CookieHarvest`, `LoginWebviewHarvest`, `SessionTokenRefresher` (webview login) | R5 |
 | A working `PoTokenGenerator` (needs the R5 webview) | R5 |
 | `YouTube/` (main-YouTube parsers, comments) | not planned |

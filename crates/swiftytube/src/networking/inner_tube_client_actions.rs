@@ -1,6 +1,6 @@
 // Account, library and queue endpoints. Parsing stays in apps.
 // Swift `extension InnerTubeClient` → a second `impl InnerTubeClient` block.
-// Not here yet: `verifySession` (needs Sync's `BrowseLens`, R5).
+// `verifySession` does not dump the menu JSON to disk (`dumpDiagnosticJSON` is not ported).
 
 use std::collections::HashSet;
 
@@ -22,6 +22,7 @@ use crate::core::youtube_locale::YouTubeLocale;
 use crate::core::youtube_service::YouTubeService;
 use crate::streaming::duration_cache::DurationCache;
 use crate::streaming::player_response::PlayerResponse;
+use crate::sync::browse_lens::BrowseLens;
 
 impl InnerTubeClient {
     // MARK: - Auth state
@@ -237,6 +238,37 @@ impl InnerTubeClient {
             RetryPolicy::INNER_TUBE,
         )
         .await
+    }
+
+    /// Probes `account/account_menu` to confirm the session is still valid.
+    pub async fn verify_session(
+        &self,
+        client: Option<YouTubeClient>,
+        locale: Option<YouTubeLocale>,
+    ) -> Result<bool, InnerTubeError> {
+        let json = self.account_menu(client, locale, None).await?;
+        if BrowseLens::account_name_runs(&json).is_some_and(|runs| !runs.is_empty()) {
+            return Ok(true);
+        }
+        let Some(identity) = BrowseLens::signed_in_account(&json) else {
+            if json.is_empty() {
+                SwiftyTubeLog::error("verifySession: empty account menu response");
+            } else {
+                SwiftyTubeLog::notice("verifySession: no account header in menu");
+            }
+            return Ok(false);
+        };
+        SwiftyTubeLog::debug(&format!(
+            "verifySession: signed in as {} email={} photo={}",
+            identity.name.as_deref().unwrap_or("?"),
+            if identity.email.is_some() {
+                "yes"
+            } else {
+                "no"
+            },
+            if identity.has_photo { "yes" } else { "no" },
+        ));
+        Ok(true)
     }
 
     /// Fetches account info (name, email, profile picture).

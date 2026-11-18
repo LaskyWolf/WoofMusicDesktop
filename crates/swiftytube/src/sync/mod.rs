@@ -1,4 +1,11 @@
 pub mod artist_credits;
 pub mod browse_lens;
+pub mod incremental_sync_service;
+pub mod library_browse_parser;
+pub mod library_parsed_models;
+pub mod library_sync_models;
+pub mod library_sync_service;
+pub mod library_sync_store;
+pub mod mutation_service;
 pub mod playlist_detail_service;
 pub mod regional_charts;
