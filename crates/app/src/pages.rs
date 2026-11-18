@@ -139,23 +139,7 @@ pub fn search<'a>(
         .on_submit(Message::SearchSubmit)
         .size(16)
         .padding([12, 16])
-        .style(|_, status| text_input::Style {
-            background: Background::Color(theme::HOVER),
-            border: Border::default().rounded(14).width(1).color(match status {
-                text_input::Status::Focused { .. } => Color {
-                    a: 0.6,
-                    ..theme::ACCENT
-                },
-                _ => theme::HOVER,
-            }),
-            icon: theme::SECONDARY,
-            placeholder: theme::SECONDARY,
-            value: theme::TEXT,
-            selection: Color {
-                a: 0.4,
-                ..theme::ACCENT
-            },
-        });
+        .style(ui::field_style);
     let mut page = vec![container(field).max_width(640).into()];
     match results {
         None => {}
@@ -408,6 +392,64 @@ fn count(n: i64, noun: &str) -> String {
 }
 
 /// Library demo: 5,000 song rows in a virtualized list (real library in R5).
+/// Library while signed out: Google sign-in, and the cookie paste under it.
+pub fn sign_in<'a>(
+    signing_in: bool,
+    cookie_header: &'a str,
+    error: Option<&'a str>,
+) -> Element<'a, Message> {
+    let mut prompt = column![
+        text("Sign in to see your library")
+            .size(28)
+            .font(theme::weight(Weight::Bold)),
+        text(
+            "Your playlists, albums, artists and liked songs come from your YouTube Music account."
+        )
+        .size(15)
+        .color(theme::SECONDARY)
+        .width(Length::Fill)
+        .align_x(Alignment::Center),
+        Space::new().height(12),
+        ui::accent_button(
+            if signing_in {
+                "Finish in the Google window"
+            } else {
+                "Sign in with Google"
+            },
+            None,
+            (!signing_in).then_some(Message::SignIn),
+        ),
+    ]
+    .spacing(8)
+    .align_x(Alignment::Center)
+    .max_width(520);
+    if let Some(error) = error {
+        prompt = prompt.push(text(error).size(13).color(theme::CLOSE));
+    }
+    let paste = row![
+        text_input("Cookie header", cookie_header)
+            .secure(true)
+            .on_input(Message::CookieInput)
+            .on_submit(Message::ImportCookies)
+            .size(14)
+            .padding([10, 14])
+            .style(ui::field_style),
+        ui::pill_button("Use cookies", Message::ImportCookies),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    ui::centered(
+        prompt
+            .push(Space::new().height(28))
+            .push(
+                text("Or paste the Cookie header of a signed-in music.youtube.com tab.")
+                    .size(13)
+                    .color(theme::SECONDARY),
+            )
+            .push(paste),
+    )
+}
+
 pub fn library(state: &virtual_list::State) -> Element<'_, Message> {
     const ROW_HEIGHT: f32 = 56.0;
     virtual_list::view(

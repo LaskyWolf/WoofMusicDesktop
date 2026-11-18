@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use iced::widget::image;
+use swiftytube::auth::account_info::AccountInfo;
 use swiftytube::auth::auth_state::AuthState;
+use swiftytube::auth::secure_store::{SecureAuthStore, SecureStore};
+use swiftytube::auth::session_importer::SessionImporter;
 use swiftytube::core::swiftytube_config::SwiftyTubeConfig;
 use swiftytube::core::youtube_client::YouTubeClient;
 use swiftytube::networking::artwork_urls::ArtworkURLs;
@@ -136,6 +139,94 @@ impl Services {
             .flatten()
     }
 
+    // MARK: - Session
+
+    /// Signs in with the session saved in the system keyring, if any.
+    pub async fn restore(self: Arc<Self>) -> bool {
+        match blocking(|| keyring().load()).await {
+            Some(Ok(auth)) if auth.sapisid.is_some() => {
+                self.client.update_auth(auth);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Google sign-in in the login window; false when it closed without a session.
+    pub async fn sign_in(self: Arc<Self>) -> bool {
+        match blocking(|| webview("--login", None)).await.flatten() {
+            Some(auth) => {
+                self.adopt(auth).await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The cookie-paste fallback: a `Cookie` header copied from a signed-in browser.
+    pub async fn import_cookies(self: Arc<Self>, header: String) -> bool {
+        match SessionImporter::import_session(header.trim(), None) {
+            Ok(auth) if auth.sapisid.is_some() => {
+                self.adopt(auth).await;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub async fn sign_out(self: Arc<Self>) {
+        self.client.update_auth(AuthState::guest());
+        if let Some(Err(error)) = blocking(|| keyring().clear()).await {
+            eprintln!("Could not remove the saved session: {error}");
+        }
+    }
+
+    /// Uses `auth` now and saves it for the next launch.
+    async fn adopt(&self, auth: AuthState) {
+        self.client.update_auth(auth.clone());
+        // ponytail: Windows Credential Manager caps a secret at 2560 bytes and
+        // a cookie set can be longer; split the secret if saving fails there.
+        if let Some(Err(error)) = blocking(move || keyring().save(&auth)).await {
+            eprintln!("Could not save the session; sign in again next time: {error}");
+        }
+    }
+
+    /// The signed-in account. A guest-shaped answer means stale rotating
+    /// tokens (Swift `AccountState.fetchAccountInfo`): ask three times, then
+    /// renew the session once through Google and ask again.
+    pub async fn account(self: Arc<Self>) -> Result<AccountInfo, String> {
+        let signed_in = |info: &AccountInfo| !info.name.is_empty() && info.name != "Guest";
+        for attempt in 1..=3 {
+            let info = self
+                .client
+                .account_info(None, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            if signed_in(&info) {
+                return Ok(info);
+            }
+            if attempt < 3 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+        let current = self.client.current_auth();
+        let renewed = blocking(move || webview("--refresh", Some(&current)))
+            .await
+            .flatten()
+            .ok_or("Google no longer accepts this session. Sign in again.")?;
+        self.adopt(renewed).await;
+        let info = self
+            .client
+            .account_info(None, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        if signed_in(&info) {
+            Ok(info)
+        } else {
+            Err("Google no longer accepts this session. Sign in again.".to_owned())
+        }
+    }
+
     /// A playable stream URL: VISIONOS first, cipher clients after.
     pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<String, String> {
         let request = StreamResolveRequest::playback(&video_id, StreamResolveOptions::default());
@@ -170,4 +261,37 @@ impl Artwork {
             image: image::Handle::from_rgba(side, side, square.into_raw()),
         })
     }
+}
+
+fn keyring() -> SecureAuthStore {
+    SecureAuthStore::new(SecureStore::new(crate::APP_ID))
+}
+
+/// Keyring and child-process calls block: off the async workers. `None` if the task panicked.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    tokio::task::spawn_blocking(work).await.ok()
+}
+
+/// Runs this binary in its webview mode (`login.rs`) and reads the session it prints.
+fn webview(mode: &str, input: Option<&AuthState>) -> Option<AuthState> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().ok()?)
+        .arg(mode)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .spawn()
+        .ok()?;
+    if let Some(auth) = input {
+        // Dropping stdin after the write closes it: the child reads to the end.
+        serde_json::to_writer(child.stdin.take()?, auth).ok()?;
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
 }

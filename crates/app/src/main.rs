@@ -1,6 +1,7 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
 mod glass;
+mod login;
 mod now_playing;
 mod pages;
 mod services;
@@ -29,8 +30,9 @@ use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
 use services::{Artwork, Services};
+use swiftytube::auth::account_info::AccountInfo;
 
-const APP_ID: &str = "com.laskywolf.woofmusic";
+pub(crate) const APP_ID: &str = "com.laskywolf.woofmusic";
 
 /// Rows past this many get no cover download until long lists are virtualized.
 const MAX_ROW_COVERS: usize = 300;
@@ -39,6 +41,11 @@ const MAX_ROW_COVERS: usize = 300;
 const RESTART_AFTER: f64 = 3.0;
 
 pub fn main() -> iced::Result {
+    match std::env::args().nth(1).as_deref() {
+        Some("--login") => login::run(false),
+        Some("--refresh") => login::run(true),
+        _ => {}
+    }
     iced::application(App::new, App::update, App::view)
         .title("WoofMusic")
         .subscription(App::subscription)
@@ -235,6 +242,19 @@ struct App {
     queue_list: virtual_list::State,
     /// The current song's large cover and colours, with its video id.
     artwork: Option<(String, Artwork)>,
+    session: Session,
+    /// Why the last sign-in did not finish, under the sign-in button.
+    sign_in_error: Option<&'static str>,
+    /// The cookie-paste fallback's field.
+    cookie_header: String,
+}
+
+pub enum Session {
+    Guest,
+    /// The login window is open, or pasted cookies are being checked.
+    SigningIn,
+    /// The account's name and photo, `None` while they load.
+    SignedIn(Option<Result<AccountInfo, String>>),
 }
 
 /// The queue and what the player bar shows.
@@ -308,6 +328,13 @@ pub enum Message {
     /// Escape: close the queue, then Now Playing.
     Dismiss,
     Snapshot(window::Screenshot),
+    SignIn,
+    CookieInput(String),
+    ImportCookies,
+    SignOut,
+    /// A session was restored, signed in or out (`true`), or sign-in did not finish (`false`).
+    SessionReady(bool),
+    Account(Result<AccountInfo, String>),
 }
 
 impl App {
@@ -340,6 +367,9 @@ impl App {
             queue_open: std::env::var("WOOF_QUEUE").is_ok(),
             queue_list: virtual_list::State::default(),
             artwork: None,
+            session: Session::Guest,
+            sign_in_error: None,
+            cookie_header: String::new(),
         };
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -361,7 +391,14 @@ impl App {
         };
         (
             app,
-            Task::batch([load_home(&services), enter, search, scroll, snapshot_task()]),
+            Task::batch([
+                // Home loads once the saved session is back, so it is the account's Home.
+                Task::perform(services.restore(), Message::SessionReady),
+                enter,
+                search,
+                scroll,
+                snapshot_task(),
+            ]),
         )
     }
 
@@ -409,6 +446,67 @@ impl App {
                     entry.offset = offset;
                 }
                 Task::none()
+            }
+            Message::SignIn => {
+                self.session = Session::SigningIn;
+                self.sign_in_error = None;
+                Task::perform(self.services.clone().sign_in(), Message::SessionReady)
+            }
+            Message::CookieInput(header) => {
+                self.cookie_header = header;
+                Task::none()
+            }
+            Message::ImportCookies => {
+                if self.cookie_header.trim().is_empty()
+                    || matches!(self.session, Session::SigningIn)
+                {
+                    return Task::none();
+                }
+                self.session = Session::SigningIn;
+                self.sign_in_error = None;
+                Task::perform(
+                    self.services
+                        .clone()
+                        .import_cookies(self.cookie_header.clone()),
+                    Message::SessionReady,
+                )
+            }
+            Message::SignOut => {
+                self.session = Session::Guest;
+                Task::perform(self.services.clone().sign_out(), |()| {
+                    Message::SessionReady(false)
+                })
+            }
+            Message::SessionReady(signed_in) => {
+                if !signed_in && matches!(self.session, Session::SigningIn) {
+                    self.session = Session::Guest;
+                    self.sign_in_error = Some(
+                        "Sign-in did not finish. Try again, or paste a Cookie header that has SAPISID.",
+                    );
+                    return Task::none();
+                }
+                let account = if signed_in {
+                    self.session = Session::SignedIn(None);
+                    self.cookie_header.clear();
+                    Task::perform(self.services.clone().account(), Message::Account)
+                } else {
+                    Task::none()
+                };
+                // Home and private playlists differ per account: load them again.
+                self.home = Load::Loading;
+                self.details.clear();
+                Task::batch([load_home(&self.services), self.enter(), account])
+            }
+            Message::Account(result) => {
+                if !matches!(self.session, Session::SignedIn(_)) {
+                    return Task::none();
+                }
+                let photo = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|info| info.thumbnail_url.clone());
+                self.session = Session::SignedIn(Some(result));
+                self.fetch_covers(photo)
             }
             Message::LibraryScrolled(viewport) => {
                 self.library.update(viewport);
@@ -770,7 +868,7 @@ impl App {
         if now_playing.is_none() && scrolled {
             layers = layers.push(ui::scroll_edge());
         }
-        let mut layers = layers.push(sidebar(&self.stack[0].route));
+        let mut layers = layers.push(sidebar(&self.stack[0].route, &self.covers, &self.session));
         if self.queue_open && self.player.song().is_some() {
             layers = layers.push(now_playing::queue(
                 &self.covers,
@@ -798,7 +896,14 @@ impl App {
         let playing = self.player.song().map(|song| song.video_id.as_str());
         match self.route() {
             Route::Home => pages::home(covers, &self.home, playing),
-            Route::Library => pages::library(&self.library),
+            Route::Library => match &self.session {
+                Session::SignedIn(_) => pages::library(&self.library),
+                session => pages::sign_in(
+                    matches!(session, Session::SigningIn),
+                    &self.cookie_header,
+                    self.sign_in_error,
+                ),
+            },
             Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
@@ -1013,6 +1118,57 @@ fn explore_covers(sections: &[ExploreSection]) -> Vec<String> {
         .collect()
 }
 
+/// The sidebar's foot: the account and Sign out, or Sign in.
+fn account<'a>(covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Message> {
+    const PHOTO: f32 = 32.0;
+    const NAME: f32 = theme::SIDEBAR_WIDTH - 20.0 - 24.0 - PHOTO - 10.0;
+    let info = match session {
+        Session::SignedIn(info) => info,
+        Session::Guest | Session::SigningIn => {
+            // Quiet here: Library carries the teal Sign in.
+            let foot: Element<'a, Message> = if matches!(session, Session::SigningIn) {
+                text("Signing in…").size(14).color(theme::SECONDARY).into()
+            } else {
+                ui::pill_button("Sign in", Message::SignIn)
+            };
+            return container(foot).padding([8, 12]).into();
+        }
+    };
+    let (name, photo) = match info {
+        Some(Ok(info)) => (info.name.as_str(), info.thumbnail_url.as_deref()),
+        Some(Err(_)) => ("Account unavailable", None),
+        None => ("Signed in", None),
+    };
+    let sign_out = button(text("Sign out").size(12))
+        .padding(0)
+        .on_press(Message::SignOut)
+        .style(|_, status| button::Style {
+            text_color: if status == button::Status::Hovered {
+                theme::TEXT
+            } else {
+                theme::SECONDARY
+            },
+            ..button::Style::default()
+        });
+    let mut details = column![
+        text(ui::fit(name, NAME, 14.0))
+            .size(14)
+            .font(theme::weight(Weight::Medium))
+            .wrapping(text::Wrapping::None),
+    ];
+    if let Some(Err(error)) = info {
+        details = details.push(text(error.as_str()).size(11).color(theme::SECONDARY));
+    }
+    row![
+        ui::cover(covers, photo, PHOTO, PHOTO / 2.0),
+        details.push(sign_out).spacing(2),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .padding([8, 12])
+    .into()
+}
+
 /// Dev aid: WOOF_PAGE opens a page over Home at start: `library`, `explore`,
 /// `search`, `album:ID`, `artist:ID`, `playlist:ID` or `podcast:ID`.
 fn dev_route() -> Option<Route> {
@@ -1073,7 +1229,7 @@ fn transport_button<'a>(
         })
 }
 
-fn sidebar<'a>(root: &Route) -> Element<'a, Message> {
+fn sidebar<'a>(root: &Route, covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Message> {
     let item = |(route, label): (Route, &'static str)| {
         let selected = *root == route;
         button(
@@ -1121,6 +1277,8 @@ fn sidebar<'a>(root: &Route) -> Element<'a, Message> {
         .map(Message::TitleBar),
     ]
     .extend(Route::TABS.map(item).map(Element::from))
+    .push(Space::new().height(Length::Fill))
+    .push(account(covers, session))
     .spacing(2)
     .padding(10);
     container(ui::glass_panel(

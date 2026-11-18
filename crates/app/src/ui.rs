@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use iced::font::Weight;
 use iced::gradient::Linear;
-use iced::widget::{Space, button, column, container, image, row, scrollable, stack, svg, text};
+use iced::widget::{
+    Space, button, column, container, image, row, scrollable, stack, svg, text, text_input,
+};
 use iced::{
     Alignment, Background, Border, Color, ContentFit, Element, Gradient, Length, Padding, Radians,
 };
@@ -273,9 +275,11 @@ pub fn header<'a>(
         info = info.push(text(line).size(14).color(theme::SECONDARY));
     }
     if let Some(play) = play {
-        info = info
-            .push(Space::new().height(10))
-            .push(accent_button("Play", play));
+        info = info.push(Space::new().height(10)).push(accent_button(
+            "Play",
+            Some(crate::icons::PLAY),
+            Some(play),
+        ));
     }
     row![
         cover(
@@ -454,28 +458,55 @@ pub fn pill_button<'a>(label: &'a str, message: Message) -> Element<'a, Message>
 }
 
 /// Teal button with dark text: white on teal is too faint to read.
-fn accent_button<'a>(label: &'a str, message: Message) -> Element<'a, Message> {
-    let play = icon(crate::icons::PLAY, 16.0).style(|_, _| svg::Style {
-        color: Some(theme::BACKGROUND),
-    });
-    button(
-        row![play, text(label).size(15).font(theme::weight(Weight::Bold))]
-            .spacing(8)
-            .align_y(Alignment::Center),
-    )
-    .padding([10, 22])
-    .on_press(message)
-    .style(|_, status| button::Style {
-        background: Some(Background::Color(if status == button::Status::Hovered {
-            theme::ACCENT_HOVER
-        } else {
-            theme::ACCENT
-        })),
-        border: Border::default().rounded(22),
-        text_color: theme::BACKGROUND,
-        ..button::Style::default()
-    })
-    .into()
+pub fn accent_button<'a>(
+    label: &'a str,
+    icon_bytes: Option<&'static [u8]>,
+    message: Option<Message>,
+) -> Element<'a, Message> {
+    let mut content = row![].spacing(8).align_y(Alignment::Center);
+    if let Some(bytes) = icon_bytes {
+        content = content.push(icon(bytes, 16.0).style(|_, _| svg::Style {
+            color: Some(theme::BACKGROUND),
+        }));
+    }
+    button(content.push(text(label).size(15).font(theme::weight(Weight::Bold))))
+        .padding([10, 22])
+        .on_press_maybe(message)
+        .style(|_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered => theme::ACCENT_HOVER,
+                button::Status::Disabled => Color {
+                    a: 0.4,
+                    ..theme::ACCENT
+                },
+                _ => theme::ACCENT,
+            })),
+            border: Border::default().rounded(22),
+            text_color: theme::BACKGROUND,
+            ..button::Style::default()
+        })
+        .into()
+}
+
+/// A text field on the dark glass: teal outline while focused.
+pub fn field_style(_: &iced::Theme, status: text_input::Status) -> text_input::Style {
+    text_input::Style {
+        background: Background::Color(theme::HOVER),
+        border: Border::default().rounded(14).width(1).color(match status {
+            text_input::Status::Focused { .. } => Color {
+                a: 0.6,
+                ..theme::ACCENT
+            },
+            _ => theme::HOVER,
+        }),
+        icon: theme::SECONDARY,
+        placeholder: theme::SECONDARY,
+        value: theme::TEXT,
+        selection: Color {
+            a: 0.4,
+            ..theme::ACCENT
+        },
+    }
 }
 
 /// A glass panel: the glass under `content`, both filling `width` × `height`.
