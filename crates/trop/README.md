@@ -22,13 +22,21 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `Task` cancellation of an older search | the caller drops the older future |
 | `UIImage` drawn into a `CGContext` | 8-bit RGBA byte slices; the caller decodes and scales the image |
 | In-memory caches (`ArtistDetailCache`, `MoodDetailCache`) | `static Mutex<HashMap>` with `Instant` timestamps |
+| GRDB `DatabasePool` in `actor DatabaseService` | `Mutex<rusqlite::Connection>` (bundled SQLite, WAL); synchronous methods, callers run them off the UI thread |
+| GRDB `DatabaseMigrator` | `database_service::migrate`: one transaction per migration, applied ids in `grdb_migrations` like GRDB |
+| GRDB `create(table:)` / `alter(table:)` | the SQL GRDB generates, same names, types and defaults |
+| `FetchableRecord & PersistableRecord` entities | `Record` trait (`TABLE`, `COLUMNS`, `PRIMARY_KEY`, `from_row`, `values`) in `database/mod.rs` |
+| GRDB `Date` columns | `SystemTime`, stored as GRDB's UTC text `yyyy-MM-dd HH:mm:ss.SSS` (`date_text`, `DbDate`) |
+| `ProfileStorage.databaseURL` | `DatabaseService::default_path()`: `$XDG_DATA_HOME` (or `~/.local/share`) / `%APPDATA%`, then `WoofMusic/trop.sqlite`; `reopen(path)` for another profile |
+| Fallback temp file, then `:memory:` | `:memory:` only; `uses_temporary_storage()` reports it |
+| Swift `throws` from GRDB | `rusqlite::Error`; `update` of a missing row is `QueryReturnedNoRows` (GRDB `recordNotFound`) |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`.
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities).
 
-Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5).
+Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers.
 
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases.
