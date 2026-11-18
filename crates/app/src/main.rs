@@ -1,11 +1,13 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
 mod glass;
+mod integrations;
 mod login;
 mod media_controls;
 mod now_playing;
 mod pages;
 mod services;
+mod settings;
 mod theme;
 mod title_bar;
 mod ui;
@@ -87,6 +89,7 @@ pub enum Route {
     /// Library shortcuts, read from the database.
     LikedSongs,
     TopSongs,
+    Settings,
 }
 
 impl Route {
@@ -111,7 +114,7 @@ impl Route {
             )),
             Route::LikedSongs => Some("liked".to_owned()),
             Route::TopSongs => Some("top100".to_owned()),
-            Route::Home | Route::Explore | Route::Library | Route::Search => None,
+            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => None,
         }
     }
 }
@@ -268,6 +271,7 @@ struct App {
     sign_in_error: Option<&'static str>,
     /// The cookie-paste fallback's field.
     cookie_header: String,
+    settings: settings::State,
 }
 
 pub enum Session {
@@ -364,6 +368,8 @@ pub enum Message {
     /// A session was restored, signed in or out (`true`), or sign-in did not finish (`false`).
     SessionReady(bool),
     Account(Result<AccountInfo, String>),
+    /// The Settings page and the player bar's Copy song link.
+    Settings(settings::Message),
 }
 
 impl App {
@@ -410,6 +416,7 @@ impl App {
             },
             sign_in_error: None,
             cookie_header: String::new(),
+            settings: settings::State::default(),
         };
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -439,6 +446,7 @@ impl App {
                 scroll,
                 snapshot_task(),
                 media_controls::attach(),
+                settings::load(),
             ]),
         )
     }
@@ -804,6 +812,7 @@ impl App {
             Message::Tick => {
                 let was = self.player.state;
                 self.read_player();
+                integrations::tick(&self.player);
                 let now = Instant::now();
                 self.plays
                     .set_playing(self.player.state == PlayState::Playing, now);
@@ -819,6 +828,7 @@ impl App {
                     saved
                 }
             }
+            Message::Settings(message) => self.settings.update(message),
             Message::Snapshot(shot) => {
                 let path = std::env::var("WOOF_SNAPSHOT").expect("set when the snapshot runs");
                 if let Err(error) = save_png(&path, &shot) {
@@ -855,6 +865,7 @@ impl App {
             }
             Route::Library => Task::none(),
             Route::Search => focus(pages::SEARCH_INPUT),
+            Route::Settings => settings::load(),
             Route::Explore => {
                 if self.explore.is_some() {
                     return Task::none();
@@ -1092,6 +1103,7 @@ impl App {
                 ),
             },
             Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
+            Route::Settings => self.settings.view(),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
@@ -1211,12 +1223,15 @@ impl App {
         };
         let lyrics = toggle(icons::LYRICS, Message::ToggleLyrics, self.showing_lyrics());
         let queue = toggle(icons::QUEUE, Message::ToggleQueue, self.queue_open);
+        let link = self
+            .settings
+            .copy_link_button(player.song().map(|song| song.video_id.as_str()));
         let content = row![
             container(now_playing).width(Length::FillPortion(1)),
             // Transport takes its own width, so the seek slider gets the rest
             // of a narrow window; equal sides keep it centred.
             transport,
-            row![seek, row![lyrics, queue].spacing(4)]
+            row![seek, row![lyrics, queue].push(link).spacing(4)]
                 .spacing(14)
                 .align_y(Alignment::Center)
                 .width(Length::FillPortion(1)),
@@ -1363,7 +1378,7 @@ fn account<'a>(covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Mess
 }
 
 /// Dev aid: WOOF_PAGE opens a page over Home at start: `library`, `explore`,
-/// `search`, `album:ID`, `artist:ID`, `playlist:ID` or `podcast:ID`.
+/// `search`, `settings`, `album:ID`, `artist:ID`, `playlist:ID` or `podcast:ID`.
 fn dev_route() -> Option<Route> {
     let page = std::env::var("WOOF_PAGE").ok()?;
     match page.split_once(':') {
@@ -1377,6 +1392,7 @@ fn dev_route() -> Option<Route> {
             "top100" => Some(Route::TopSongs),
             "explore" => Some(Route::Explore),
             "search" => Some(Route::Search),
+            "settings" => Some(Route::Settings),
             _ => None,
         },
     }
@@ -1478,6 +1494,7 @@ fn sidebar<'a>(root: &Route, covers: &'a ui::Covers, session: &'a Session) -> El
     ]
     .extend(Route::TABS.map(item).map(Element::from))
     .push(Space::new().height(Length::Fill))
+    .push(item((Route::Settings, "Settings")))
     .push(account(covers, session))
     .spacing(2)
     .padding(10);

@@ -224,7 +224,7 @@ impl Services {
                     songs.iter().map(song_item).collect(),
                 )))
             }
-            Route::Home | Route::Explore | Route::Library | Route::Search => {
+            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => {
                 Err("Not a detail page.".to_owned())
             }
         }
