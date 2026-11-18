@@ -25,6 +25,9 @@ const JUNK_LABELS: &[&str] = &[
     "podcast",
     "episode",
     "album",
+    "single",
+    "ep",
+    "audiobook",
     "playlist",
     "released",
     "year",
@@ -94,13 +97,15 @@ impl ArtistCredits {
                 continue;
             };
             let trimmed = text.trim();
-            if !Self::is_artist_name(trimmed) {
-                continue;
-            }
             let browse_id = Self::browse_id(run);
             if let Some(id) = browse_id
                 && Self::is_album_or_playlist_link(id, run)
             {
+                continue;
+            }
+            // A run that opens an artist page names one even when the name
+            // looks like a count or a year ("311", "1914").
+            if !Self::is_artist_link(browse_id, run) && !Self::is_artist_name(trimmed) {
                 continue;
             }
             // Channel ids stay attached (topic channels included): a channel
@@ -142,6 +147,14 @@ impl ArtistCredits {
         )
         .or_else(|| as_dict(nav.and_then(|n| n.get("browseEndpointContextSupportedConfigs"))));
         as_string(as_dict(supported?.get("browseEndpointContextMusicConfig"))?.get("pageType"))
+    }
+
+    fn is_artist_link(browse_id: Option<&str>, run: &JsonDict) -> bool {
+        browse_id.is_some_and(|id| id.starts_with("UC"))
+            || matches!(
+                Self::music_page_type(run),
+                Some("MUSIC_PAGE_TYPE_ARTIST" | "MUSIC_PAGE_TYPE_USER_CHANNEL")
+            )
     }
 
     /// Album/playlist links name a release, never a performer.

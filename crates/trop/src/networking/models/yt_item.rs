@@ -429,34 +429,7 @@ impl SongItem {
             .map(|t| t.trim().to_string());
         let album_id = album_run.map(|(_, id)| id.to_string());
 
-        let artists = if segments.is_empty() {
-            Vec::new()
-        } else {
-            let credits = ArtistCredits::parse(&runs);
-            let to_artist = |raw: &String| {
-                let name = ArtistCredits::cleaned_name(raw);
-                let id = credits
-                    .iter()
-                    .find(|c| c.name == name)
-                    .and_then(|c| c.browse_id.clone());
-                YTArtist { name, id }
-            };
-            let artist_segments: Vec<&Vec<String>> = segments
-                .iter()
-                .skip_while(|seg| seg.iter().all(|t| !ArtistCredits::is_artist_name(t)))
-                .collect();
-            let chosen: Vec<&Vec<String>> = if artist_segments.is_empty() {
-                vec![&segments[0]]
-            } else {
-                artist_segments
-            };
-            chosen
-                .into_iter()
-                .flatten()
-                .filter(|t| ArtistCredits::is_artist_name(t))
-                .map(to_artist)
-                .collect()
-        };
+        let artists = credits_to_artists(&runs);
         let stats = extract_item_stats(&segments);
         SongItem {
             video_id,
