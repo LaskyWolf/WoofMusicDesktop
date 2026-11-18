@@ -239,7 +239,7 @@ impl Services {
                     tracks.iter().map(crate::downloads::song).collect(),
                 )))
             }
-            Route::Home | Route::Explore | Route::Library | Route::Search => {
+            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => {
                 Err("Not a detail page.".to_owned())
             }
         }

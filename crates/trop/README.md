@@ -37,6 +37,7 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
 | `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
 | `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
+| `DiscordRpcManager` over the Discord Social SDK (sign-in, token store, bridge) | not ported: the app sends the activity to the local Discord client over IPC (`crates/app/src/integrations.rs`) |
 | `Crossfade` singleton driving mpv with `Task`s and timers | `crossfade::Crossfade` state machine: `tick` returns an `Action`, the player owns decks, timers and tasks and reports back (`plan_ready`, `deck_loaded`, `outgoing_ended`, ...) |
 | `planToken: UUID` | `u64` token in `Action::Plan`, bumped by every `reset` |
 | `runFade` / `runBeatMix` / `applyStyle` loops | `fade_gains` and `BeatMix::step`, one call per 50 ms step; they return gains and changed `af-command` values (`Effect`) |

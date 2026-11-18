@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod database;
 pub mod detail;
+pub mod discord;
 pub mod explore;
 pub mod home;
 pub mod last_fm;
