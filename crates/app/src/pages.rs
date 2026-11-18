@@ -1,4 +1,4 @@
-//! The pages: Home, Explore, Search, album, artist, playlist, podcast, mood, Library.
+//! The pages: Home, Explore, Search, album, artist, playlist, podcast, mood, Library, Liked Songs, My Top 100.
 
 use std::sync::Arc;
 
@@ -15,8 +15,9 @@ use trop::networking::models::home_page::{
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
+use crate::services::Library;
 use crate::ui::{self, Covers};
-use crate::{Load, Message, Route, theme, virtual_list};
+use crate::{Load, Message, Route, theme};
 
 pub const SEARCH_INPUT: &str = "search";
 
@@ -391,7 +392,6 @@ fn count(n: i64, noun: &str) -> String {
     }
 }
 
-/// Library demo: 5,000 song rows in a virtualized list (real library in R5).
 /// Library while signed out: Google sign-in, and the cookie paste under it.
 pub fn sign_in<'a>(
     signing_in: bool,
@@ -450,51 +450,219 @@ pub fn sign_in<'a>(
     )
 }
 
-pub fn library(state: &virtual_list::State) -> Element<'_, Message> {
-    const ROW_HEIGHT: f32 = 56.0;
-    virtual_list::view(
-        state,
-        "library",
-        5000,
-        ROW_HEIGHT,
-        ui::CONTENT_PADDING,
-        |i| demo_song_row(i, ROW_HEIGHT),
-        Message::LibraryScrolled,
-    )
+/// Library's filter chips: one section alone instead of all four.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibraryFilter {
+    Playlists,
+    Albums,
+    Artists,
+    Podcasts,
 }
 
-fn demo_song_row<'a>(index: usize, height: f32) -> Element<'a, Message> {
-    let seconds = 150 + (index * 37) % 180;
-    let (from, to) = theme::PALETTES[index % theme::PALETTES.len()];
-    let gradient = Linear::new(Radians(0.8))
-        .add_stop(0.0, from)
-        .add_stop(1.0, to);
-    let swatch = container(Space::new())
-        .width(40)
-        .height(40)
+impl LibraryFilter {
+    const ALL: [(LibraryFilter, &'static str); 4] = [
+        (LibraryFilter::Playlists, "Playlists"),
+        (LibraryFilter::Albums, "Albums"),
+        (LibraryFilter::Artists, "Artists"),
+        (LibraryFilter::Podcasts, "Podcasts"),
+    ];
+}
+
+/// Swift `LibraryView`: filter chips, the Liked Songs and My Top 100 cards,
+/// then playlists, albums, artists and podcasts.
+pub fn library<'a>(
+    covers: &'a Covers,
+    library: &'a Library,
+    filter: Option<LibraryFilter>,
+) -> Element<'a, Message> {
+    let chips = row(LibraryFilter::ALL.map(|(chip, label)| {
+        let selected = filter == Some(chip);
+        button(text(label).size(14).font(theme::weight(Weight::Medium)))
+            .padding([7, 16])
+            .on_press(Message::LibraryFilter(chip))
+            .style(move |_, status| button::Style {
+                background: Some(Background::Color(match (selected, status) {
+                    (true, _) => theme::TEXT,
+                    (false, button::Status::Hovered) => theme::PRESSED,
+                    (false, _) => theme::HOVER,
+                })),
+                border: Border::default().rounded(18),
+                text_color: if selected {
+                    theme::BACKGROUND
+                } else {
+                    theme::TEXT
+                },
+                ..button::Style::default()
+            })
+            .into()
+    }))
+    .spacing(8);
+    let shortcuts = row![
+        shortcut(
+            covers,
+            "Liked Songs",
+            count(library.liked_count, "song"),
+            &library.liked_covers,
+            crate::icons::HEART,
+            Color::from_rgb8(0xFF, 0x2D, 0x55),
+            Route::LikedSongs,
+        ),
+        shortcut(
+            covers,
+            "My Top 100",
+            "Most played".to_owned(),
+            &library.top_covers,
+            crate::icons::TROPHY,
+            Color::from_rgb8(0xFF, 0x95, 0x00),
+            Route::TopSongs,
+        ),
+    ]
+    .spacing(12);
+    let mut page = vec![column![chips, shortcuts].spacing(20).into()];
+    let sections = [
+        (LibraryFilter::Playlists, "Playlists", &library.playlists),
+        (LibraryFilter::Albums, "Albums", &library.albums),
+        (LibraryFilter::Artists, "Artists", &library.artists),
+        (LibraryFilter::Podcasts, "Podcasts", &library.podcasts),
+    ];
+    for (kind, title, items) in sections {
+        if filter.is_none_or(|filter| filter == kind) && !items.is_empty() {
+            page.push(library_section(covers, title, items));
+        }
+    }
+    if page.len() == 1 {
+        page.push(
+            text("Nothing here yet. Your library appears once the sync finishes.")
+                .size(15)
+                .color(theme::SECONDARY)
+                .into(),
+        );
+    }
+    ui::scroll_page(page)
+}
+
+fn library_section<'a>(
+    covers: &'a Covers,
+    title: &'a str,
+    items: &'a [(YTItem, String)],
+) -> Element<'a, Message> {
+    let no_songs = Arc::new(Vec::new());
+    let tiles = items
+        .iter()
+        .map(|(item, subtitle)| ui::tile(covers, item, subtitle.clone(), &no_songs, false));
+    column![
+        row![
+            ui::section_title(title),
+            Space::new().width(Length::Fill),
+            text(items.len()).size(15).color(theme::SECONDARY),
+        ]
+        .align_y(Alignment::Center),
+        iced::widget::Row::with_children(tiles)
+            .spacing(20)
+            .wrap()
+            .vertical_spacing(24),
+    ]
+    .spacing(14)
+    .into()
+}
+
+/// Swift `shortcutTile`: a card in the list's colour, its first two covers
+/// overlapping at the top and a large faint symbol in the corner.
+fn shortcut<'a>(
+    covers: &'a Covers,
+    title: &'a str,
+    subtitle: String,
+    urls: &'a [String],
+    symbol: &'static [u8],
+    tint: Color,
+    route: Route,
+) -> Element<'a, Message> {
+    const COVER: f32 = 42.0;
+    const RADIUS: f32 = 14.0;
+    let darker = Color::from_rgb(tint.r * 0.7, tint.g * 0.7, tint.b * 0.7);
+    let fill = Linear::new(Radians(2.4))
+        .add_stop(0.0, tint)
+        .add_stop(1.0, darker);
+    // The second cover sits over the first, ringed in the card's colour.
+    let mut fan = iced::widget::Stack::new();
+    for (index, url) in urls.iter().take(2).enumerate() {
+        let ringed = container(ui::cover(covers, Some(url), COVER, 7.0))
+            .padding(2)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(tint)),
+                border: Border::default().rounded(9),
+                ..container::Style::default()
+            });
+        fan =
+            fan.push(container(ringed).padding(iced::Padding::ZERO.left(index as f32 * 24.0_f32)));
+    }
+    let content = column![
+        fan,
+        Space::new().height(Length::Fill),
+        text(title).size(15).font(theme::weight(Weight::Bold)),
+        text(subtitle)
+            .size(12)
+            .font(theme::weight(Weight::Medium))
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.85)),
+    ]
+    .spacing(1);
+    let mark = container(ui::icon(symbol, 64.0).opacity(0.3_f32))
+        .align_right(Length::Fill)
+        .align_bottom(Length::Fill);
+    let card = container(iced::widget::stack![mark, content])
+        .padding(12)
+        .width(240)
+        .height(116)
         .style(move |_| container::Style {
-            background: Some(Background::Gradient(Gradient::Linear(gradient))),
-            border: Border::default().rounded(6),
+            background: Some(Background::Gradient(Gradient::Linear(fill))),
+            border: Border::default().rounded(RADIUS),
             ..container::Style::default()
         });
-    let content = row![
-        swatch,
-        column![
-            text(format!("Song {}", index + 1))
-                .size(14)
-                .font(theme::weight(Weight::Medium)),
-            text("Demo row: your library arrives with sign-in")
-                .size(13)
-                .color(theme::SECONDARY),
-        ]
-        .spacing(2)
-        .width(Length::Fill),
-        text(ui::clock(seconds as f64))
-            .size(13)
-            .color(theme::SECONDARY),
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center)
-    .height(height);
-    ui::clickable(container(content).padding([0, 8]), None, 0.0)
+    button(card)
+        .padding(0)
+        .on_press(Message::Navigate(route))
+        .style(|_, status| button::Style {
+            border: Border::default().rounded(RADIUS).width(2).color(
+                if status == button::Status::Hovered {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+                } else {
+                    Color::TRANSPARENT
+                },
+            ),
+            ..button::Style::default()
+        })
+        .into()
+}
+
+/// Liked Songs or My Top 100, from the database.
+pub fn songs<'a>(
+    covers: &'a Covers,
+    route: &Route,
+    songs: &Arc<Vec<SongItem>>,
+    playing: Option<&str>,
+) -> Element<'a, Message> {
+    let (title, empty) = match route {
+        Route::LikedSongs => ("Liked Songs", "Songs you like show up here."),
+        _ => ("My Top 100", "The songs you play most show up here."),
+    };
+    let length: i64 = songs.iter().map(|song| song.duration).sum();
+    let line = [count(songs.len() as i64, "song"), ui::total_length(length)]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" • ");
+    let mut page = vec![ui::header(
+        covers,
+        songs.first().and_then(|song| song.thumbnail_url.as_deref()),
+        false,
+        title,
+        vec![line],
+        (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+    )];
+    page.push(if songs.is_empty() {
+        text(empty).size(15).color(theme::SECONDARY).into()
+    } else {
+        tracks(covers, songs, true, playing)
+    });
+    ui::scroll_page(page)
 }

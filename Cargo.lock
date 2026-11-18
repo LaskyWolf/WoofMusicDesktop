@@ -7341,6 +7341,7 @@ dependencies = [
  "image",
  "png 0.18.1",
  "reqwest",
+ "rusqlite",
  "serde_json",
  "swiftytube",
  "tao",

@@ -29,7 +29,8 @@ use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem}
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::SearchSection;
 
-use services::{Artwork, Services};
+use pages::LibraryFilter;
+use services::{Artwork, Library, Services};
 use swiftytube::auth::account_info::AccountInfo;
 
 pub(crate) const APP_ID: &str = "com.laskywolf.woofmusic";
@@ -81,6 +82,9 @@ pub enum Route {
     Playlist(String),
     Podcast(String),
     Mood(MoodItem),
+    /// Library shortcuts, read from the database.
+    LikedSongs,
+    TopSongs,
 }
 
 impl Route {
@@ -103,6 +107,8 @@ impl Route {
                 mood.title,
                 mood.params.as_deref().unwrap_or_default()
             )),
+            Route::LikedSongs => Some("liked".to_owned()),
+            Route::TopSongs => Some("top100".to_owned()),
             Route::Home | Route::Explore | Route::Library | Route::Search => None,
         }
     }
@@ -135,6 +141,8 @@ pub enum Detail {
         songs: Arc<Vec<SongItem>>,
     },
     Mood(Vec<ExploreSection>),
+    /// Liked Songs or My Top 100.
+    Songs(Arc<Vec<SongItem>>),
 }
 
 impl Detail {
@@ -216,6 +224,7 @@ impl Detail {
                 .chain(songs(list))
                 .collect(),
             Detail::Mood(sections) => explore_covers(sections),
+            Detail::Songs(list) => songs(list),
         }
     }
 }
@@ -234,7 +243,9 @@ struct App {
     searched: String,
     results: Option<Load<Vec<SearchSection>>>,
     covers: ui::Covers,
-    library: virtual_list::State,
+    /// `None` until Library first opens; reloaded each time it opens.
+    library: Option<Load<Library>>,
+    library_filter: Option<LibraryFilter>,
     player: Player,
     /// Now Playing covers the page.
     now_playing: bool,
@@ -301,7 +312,9 @@ pub enum Message {
     Tab(Route),
     Back,
     PageScrolled(f32),
-    LibraryScrolled(scrollable::Viewport),
+    LibraryLoaded(Result<Library, String>),
+    /// A filter chip: shows only that section, or everything again.
+    LibraryFilter(LibraryFilter),
     HomeLoaded(Result<Vec<HomeSection>, String>),
     ExploreLoaded(Result<Vec<ExploreSection>, String>),
     DetailLoaded(String, Result<Arc<Detail>, String>),
@@ -360,14 +373,20 @@ impl App {
             searched: String::new(),
             results: None,
             covers: HashMap::new(),
-            library: virtual_list::State::default(),
+            library: None,
+            library_filter: None,
             player: Player::default(),
             // Dev aids: WOOF_NOW_PLAYING=1 and WOOF_QUEUE=1 open them once a song plays.
             now_playing: std::env::var("WOOF_NOW_PLAYING").is_ok(),
             queue_open: std::env::var("WOOF_QUEUE").is_ok(),
             queue_list: virtual_list::State::default(),
             artwork: None,
-            session: Session::Guest,
+            // Dev aid: WOOF_SIGNED_IN=1 shows the signed-in pages without a session.
+            session: if std::env::var("WOOF_SIGNED_IN").is_ok() {
+                Session::SignedIn(None)
+            } else {
+                Session::Guest
+            },
             sign_in_error: None,
             cookie_header: String::new(),
         };
@@ -495,6 +514,7 @@ impl App {
                 // Home and private playlists differ per account: load them again.
                 self.home = Load::Loading;
                 self.details.clear();
+                self.library = None;
                 Task::batch([load_home(&self.services), self.enter(), account])
             }
             Message::Account(result) => {
@@ -508,9 +528,17 @@ impl App {
                 self.session = Session::SignedIn(Some(result));
                 self.fetch_covers(photo)
             }
-            Message::LibraryScrolled(viewport) => {
-                self.library.update(viewport);
-                Task::none()
+            Message::LibraryLoaded(result) => {
+                let covers = match &result {
+                    Ok(library) => self.fetch_covers(library.cover_urls()),
+                    Err(_) => Task::none(),
+                };
+                self.library = Some(loaded(result));
+                covers
+            }
+            Message::LibraryFilter(filter) => {
+                self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
+                scroll_page_to(0.0)
             }
             Message::HomeLoaded(Ok(sections)) => {
                 // Dev aid: WOOF_PLAY=1 plays the first Home section with songs.
@@ -730,7 +758,15 @@ impl App {
     /// Starts loading what the page on screen needs, unless it is loaded or loading.
     fn enter(&mut self) -> Task<Message> {
         match self.route().clone() {
-            Route::Home | Route::Library => Task::none(),
+            Route::Home => Task::none(),
+            // Read on every visit: sync and bookmarks change it.
+            Route::Library if matches!(self.session, Session::SignedIn(_)) => {
+                if matches!(self.library, Some(Load::Failed(_))) {
+                    self.library = None;
+                }
+                Task::perform(self.services.clone().load_library(), Message::LibraryLoaded)
+            }
+            Route::Library => Task::none(),
             Route::Search => focus(pages::SEARCH_INPUT),
             Route::Explore => {
                 if self.explore.is_some() {
@@ -861,10 +897,7 @@ impl App {
         };
         let mut layers = stack![backdrop, page];
         // Scrolled content fades out under the back and window buttons.
-        let scrolled = match self.route() {
-            Route::Library => self.library.offset_y,
-            _ => self.stack.last().map_or(0.0, |entry| entry.offset),
-        } > 0.0;
+        let scrolled = self.stack.last().map_or(0.0, |entry| entry.offset) > 0.0;
         if now_playing.is_none() && scrolled {
             layers = layers.push(ui::scroll_edge());
         }
@@ -897,7 +930,13 @@ impl App {
         match self.route() {
             Route::Home => pages::home(covers, &self.home, playing),
             Route::Library => match &self.session {
-                Session::SignedIn(_) => pages::library(&self.library),
+                Session::SignedIn(_) => match &self.library {
+                    Some(Load::Loaded(library)) => {
+                        pages::library(covers, library, self.library_filter)
+                    }
+                    Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
+                    _ => ui::status(None, Message::Retry),
+                },
                 session => pages::sign_in(
                     matches!(session, Session::SigningIn),
                     &self.cookie_header,
@@ -923,6 +962,7 @@ impl App {
                     }
                     Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
                     Detail::Mood(sections) => pages::explore(covers, sections, playing),
+                    Detail::Songs(songs) => pages::songs(covers, route, songs, playing),
                 },
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                 _ => ui::status(None, Message::Retry),
@@ -1180,6 +1220,8 @@ fn dev_route() -> Option<Route> {
         Some(("podcast", id)) => Some(Route::Podcast(id.to_owned())),
         _ => match page.as_str() {
             "library" => Some(Route::Library),
+            "liked" => Some(Route::LikedSongs),
+            "top100" => Some(Route::TopSongs),
             "explore" => Some(Route::Explore),
             "search" => Some(Route::Search),
             _ => None,
@@ -1342,5 +1384,7 @@ mod icons {
     pub const NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4L4.2 5.5a.8.8 0 0 0-1.2.7zM12 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4l-8.6-5.8a.8.8 0 0 0-1.2.7z" fill="#fff"/></svg>"##;
     pub const PREVIOUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7zM12 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7z" fill="#fff"/></svg>"##;
     pub const QUEUE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h11M4 12h11M4 18h7"/></g><path d="M16 14.6v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z" fill="#fff"/></svg>"##;
+    pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.4 4.5 7 4.5c2.1 0 3.6 1.1 5 3 1.4-1.9 2.9-3 5-3 3.6 0 5.6 3.5 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" fill="#fff"/></svg>"##;
+    pub const TROPHY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 3h10v2h3.2a.8.8 0 0 1 .8.8V8a4 4 0 0 1-4.3 4A5 5 0 0 1 13 14.9V18h3a1 1 0 0 1 1 1v2H7v-2a1 1 0 0 1 1-1h3v-3.1A5 5 0 0 1 7.3 12 4 4 0 0 1 3 8V5.8a.8.8 0 0 1 .8-.8H7zm0 4H5v1a2 2 0 0 0 2 2zm10 0v3a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>"##;
     pub const BACK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
 }

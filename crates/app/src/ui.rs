@@ -71,7 +71,7 @@ pub fn section<'a>(
         .into()
     } else {
         iced::widget::Row::with_children(
-            items.map(|item| tile(covers, item, &songs, is_playing(item))),
+            items.map(|item| tile(covers, item, subtitle(item), &songs, is_playing(item))),
         )
         .spacing(20)
         .wrap()
@@ -132,6 +132,7 @@ pub fn open(item: &YTItem, songs: &Arc<Vec<SongItem>>) -> Option<Message> {
 pub fn tile<'a>(
     covers: &'a Covers,
     item: &'a YTItem,
+    subtitle: String,
     songs: &Arc<Vec<SongItem>>,
     playing: bool,
 ) -> Element<'a, Message> {
@@ -148,7 +149,7 @@ pub fn tile<'a>(
             .font(theme::weight(Weight::Medium))
             .color(title_color(playing))
             .wrapping(text::Wrapping::None),
-        text(fit(&subtitle(item), TILE, 13.0))
+        text(fit(&subtitle, TILE, 13.0))
             .size(13)
             .color(theme::SECONDARY)
             .wrapping(text::Wrapping::None),

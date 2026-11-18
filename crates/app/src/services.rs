@@ -16,6 +16,9 @@ use swiftytube::streaming::stream_fallback::{StreamFallback, StreamResolveReques
 use swiftytube::streaming::stream_resolver::{StreamResolveOptions, StreamResolveProviders};
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
 use trop::audio::player_controller::player_controller::PlayerController;
+use trop::database::database_service::DatabaseService;
+use trop::database::entities::playlist_entity::PlaylistEntity;
+use trop::database::entities::song_entity::SongEntity;
 use trop::detail::album_detail_parser::AlbumDetailParser;
 use trop::detail::artist_detail_parser::ArtistDetailParser;
 use trop::detail::playlist_detail_parser::PlaylistDetailParser;
@@ -23,6 +26,9 @@ use trop::detail::podcast_detail_parser::PodcastDetailParser;
 use trop::explore::explore_view_model::ExploreViewModel;
 use trop::home::home_view_model::HomeViewModel;
 use trop::networking::models::home_page::{ExploreSection, HomeSection};
+use trop::networking::models::yt_item::{
+    AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTArtist, YTItem,
+};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
@@ -33,6 +39,8 @@ pub struct Services {
     pub client: Arc<InnerTubeClient>,
     /// `None` when libmpv could not start; the UI says so instead of playing.
     pub player: Option<Arc<PlayerController>>,
+    /// The synced library; in memory when the file cannot open.
+    pub db: Arc<DatabaseService>,
     providers: StreamResolveProviders,
     http: reqwest::Client,
 }
@@ -58,6 +66,10 @@ impl Services {
                 AuthState::guest(),
             )),
             player,
+            db: Arc::new(match DatabaseService::default_path() {
+                Some(path) => DatabaseService::open(&path),
+                None => DatabaseService::open_in_memory(),
+            }),
             providers: StreamResolveProviders::live(),
             http: reqwest::Client::new(),
         })
@@ -121,6 +133,23 @@ impl Services {
                     Ok(Detail::Mood(ExploreViewModel::mood_order(sections)))
                 }
             }
+            Route::LikedSongs | Route::TopSongs => {
+                let db = self.db.clone();
+                let liked = matches!(route, Route::LikedSongs);
+                let songs = blocking(move || {
+                    if liked {
+                        db.fetch_all_liked_songs(None)
+                    } else {
+                        db.fetch_top_songs(100)
+                    }
+                })
+                .await
+                .ok_or("The library could not be read.")?
+                .map_err(|error| error.to_string())?;
+                Ok(Detail::Songs(Arc::new(
+                    songs.iter().map(song_item).collect(),
+                )))
+            }
             Route::Home | Route::Explore | Route::Library | Route::Search => {
                 Err("Not a detail page.".to_owned())
             }
@@ -137,6 +166,15 @@ impl Services {
             .await
             .ok()
             .flatten()
+    }
+
+    /// Swift `LibraryView.loadContent`: what the library tab shows, from the database.
+    pub async fn load_library(self: Arc<Self>) -> Result<Library, String> {
+        let db = self.db.clone();
+        blocking(move || Library::read(&db))
+            .await
+            .ok_or("The library could not be read.")?
+            .map_err(|error| error.to_string())
     }
 
     // MARK: - Session
@@ -294,4 +332,169 @@ fn webview(mode: &str, input: Option<&AuthState>) -> Option<AuthState> {
         return None;
     }
     serde_json::from_slice(&output.stdout).ok()
+}
+
+/// The library tab's content, as page items.
+#[derive(Debug, Default, Clone)]
+pub struct Library {
+    pub liked_count: i64,
+    /// First covers of Liked Songs and My Top 100, in the order their pages open with.
+    pub liked_covers: Vec<String>,
+    pub top_covers: Vec<String>,
+    /// Each item with the subtitle its tile shows.
+    pub playlists: Vec<(YTItem, String)>,
+    pub albums: Vec<(YTItem, String)>,
+    pub artists: Vec<(YTItem, String)>,
+    pub podcasts: Vec<(YTItem, String)>,
+}
+
+impl Library {
+    pub fn cover_urls(&self) -> Vec<String> {
+        let tiles = [&self.playlists, &self.albums, &self.artists, &self.podcasts]
+            .into_iter()
+            .flatten()
+            .filter_map(|(item, _)| item.thumbnail_url().map(str::to_owned));
+        self.liked_covers
+            .iter()
+            .chain(&self.top_covers)
+            .cloned()
+            .chain(tiles)
+            .collect()
+    }
+
+    fn read(db: &DatabaseService) -> rusqlite::Result<Self> {
+        let hidden = |id: &str| PlaylistEntity::HIDDEN_IDS.contains(&id);
+        let strings = |sql: &str| {
+            db.read(|conn| {
+                conn.prepare(sql)?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+        };
+        let counts: std::collections::HashMap<String, i64> = db.read(|conn| {
+            conn.prepare(
+                "SELECT playlist_id, COUNT(*) FROM playlist_song_map \
+                 WHERE EXISTS (SELECT 1 FROM song WHERE id = song_id) GROUP BY playlist_id",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+        })?;
+        let playlists = db
+            .fetch_all_sql::<PlaylistEntity>(
+                "SELECT * FROM playlist WHERE bookmarked_at IS NOT NULL ORDER BY name",
+                [],
+            )?
+            .into_iter()
+            .filter(|playlist| !hidden(&playlist.id))
+            .map(|playlist| {
+                let subtitle = counts
+                    .get(&playlist.id)
+                    .map_or_else(String::new, |n| songs_label(*n));
+                let item = YTItem::Playlist(PlaylistItem {
+                    id: playlist.id,
+                    title: playlist.name,
+                    author: None,
+                    thumbnail_url: playlist.thumbnail_url,
+                    song_count: None,
+                });
+                (item, subtitle)
+            })
+            .collect();
+        let albums = db
+            .fetch_all_albums()?
+            .into_iter()
+            .map(|album| {
+                let subtitle = songs_label(album.song_count);
+                let item = YTItem::Album(AlbumItem {
+                    browse_id: album.id,
+                    title: album.title,
+                    artists: Vec::new(),
+                    year: None,
+                    thumbnail_url: album.thumbnail_url,
+                    playlist_id: album.playlist_id,
+                    is_explicit: false,
+                });
+                (item, subtitle)
+            })
+            .collect();
+        let artists = db
+            .fetch_all_sql::<trop::database::entities::artist_entity::ArtistEntity>(
+                "SELECT * FROM artist WHERE bookmarked_at IS NOT NULL ORDER BY name",
+                [],
+            )?
+            .into_iter()
+            .map(|artist| {
+                let subtitle = if artist.is_podcast_channel {
+                    "Podcast Channel"
+                } else {
+                    "Artist"
+                };
+                let item = YTItem::Artist(ArtistItem {
+                    browse_id: artist.id,
+                    name: artist.name,
+                    thumbnail_url: artist.thumbnail_url,
+                    is_subscribed: true,
+                });
+                (item, subtitle.to_owned())
+            })
+            .collect();
+        let podcasts = db
+            .fetch_all_podcasts()?
+            .into_iter()
+            .filter(|podcast| !hidden(&podcast.id))
+            .map(|podcast| {
+                let item = YTItem::Podcast(PodcastItem {
+                    browse_id: podcast.id,
+                    title: podcast.name,
+                    author: None,
+                    thumbnail_url: podcast.thumbnail_url,
+                });
+                // The library stores no author.
+                (item, "Podcast".to_owned())
+            })
+            .collect();
+        Ok(Self {
+            liked_count: db.fetch_all_liked_song_count()?,
+            liked_covers: strings(
+                "SELECT thumbnail_url FROM song WHERE liked = 1 AND thumbnail_url <> '' \
+                 ORDER BY create_date DESC LIMIT 2",
+            )?,
+            top_covers: strings(
+                "SELECT thumbnail_url FROM song WHERE total_play_time > 0 AND thumbnail_url <> '' \
+                 ORDER BY total_play_time DESC LIMIT 2",
+            )?,
+            playlists,
+            albums,
+            artists,
+            podcasts,
+        })
+    }
+}
+
+fn songs_label(count: i64) -> String {
+    match count {
+        0 => String::new(),
+        1 => "1 song".to_owned(),
+        n => format!("{n} songs"),
+    }
+}
+
+/// A library song as a queue entry. The database keeps names, not ids.
+fn song_item(song: &SongEntity) -> SongItem {
+    SongItem {
+        video_id: song.id.clone(),
+        title: song.title.clone(),
+        artists: song
+            .artist_name
+            .iter()
+            .map(|name| YTArtist {
+                name: name.clone(),
+                id: None,
+            })
+            .collect(),
+        album: song.album_name.clone(),
+        duration: song.duration,
+        thumbnail_url: song.thumbnail_url.clone(),
+        ..SongItem::default()
+    }
 }
