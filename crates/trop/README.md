@@ -37,6 +37,16 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
 | `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
 | `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
+| `UserDefaults` in `LastFMDefaults`, `ListenBrainzDefaults` | `LastFMSettings`, `ListenBrainzSettings`: serde structs with the Swift keys, each in its own JSON file next to `sync_defaults.json` (`default_path()`) |
+| `LASTFM_API_KEY` / `LASTFM_SECRET` from the environment or Info.plist | the environment at run time, else `option_env!` at build time |
+| Keychain `SecureStore` in `LastFMTokenStore`, `ListenBrainz`, `Odesli` | SwiftyTube's keyring `SecureStore`, same service and account names (first profile: unscoped) |
+| `CryptoKit` `Insecure.MD5` (Last.fm `api_sig`) | `md-5` crate |
+| `NowPlaying.shared` read by `LastFMIntegration` and `ListenBrainz` | a `PlayingSong` snapshot the app passes to `LastFMIntegration::sync_state` (every second and on each change) and `ListenBrainz::tick` (4 times a second) |
+| `LastFMIntegration` scrobble `Task.sleep` timer | a deadline checked by `sync_state`; a scrobble goes out up to one call late |
+| Detached `Task` sends in `LastFMIntegration`, `ListenBrainz` | awaited inside `sync_state` / `tick` |
+| `SettingsStore.isIncognito` | `incognito` field on `LastFMIntegration` and `ListenBrainz` |
+| `LastFMAuthWebView` (WKWebView + polling) | `LastFMService::start_sign_in` (token + approval URL to open in the browser) and `complete_sign_in` (polls `auth.getSession` every 2 s, stores the session) |
+| `MusicLink(odesliResponse:)`, `MusicLink.isConvertible` | `Odesli::youtube_link` (the URL, not a parsed `MusicLink`), `Odesli::is_convertible` |
 
 ## Status
 
@@ -44,6 +54,8 @@ Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home
 
 Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync.
 
+Integrations translated: `LastFM/` (service, integration, defaults, token store, the logic of `LastFMAuthWebView`), `ListenBrainz/` (all but the settings view), `Odesli/` (all but the settings view). Not ported: Last.fm's legacy migrations (session key in `UserDefaults`, keychain `username` and `subscriber`), the unused `lastFMLikeChanged` observer, an offline queue for failed sends.
+
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`. `scrobbling_test.rs` and `odesli_test.rs` run Last.fm, ListenBrainz and Odesli on `crates/fixtures/{last_fm,listen_brainz,odesli}/` with keyring-core's mock store.
