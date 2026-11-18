@@ -44,6 +44,15 @@ fn credits_to_artists(runs: &[&JsonDict]) -> Vec<YTArtist> {
         .collect()
 }
 
+/// First credited name of a playlist byline ("Playlist • Owner • 687 views");
+/// the kind word and the counts are not names.
+fn playlist_author(runs: &[&JsonDict]) -> Option<String> {
+    ArtistCredits::parse(runs)
+        .into_iter()
+        .next()
+        .map(|c| c.name)
+}
+
 /// Bare 4-digit release year segment.
 fn parse_year(text: &str) -> Option<i64> {
     let trimmed = text.trim();
@@ -232,16 +241,13 @@ impl YTItem {
                 thumbnail_url,
                 is_subscribed: false,
             })),
-            Some("MUSIC_PAGE_TYPE_PLAYLIST") => {
-                let segments = split_runs_by_separator(&flex_text_runs(&flex_columns, 1));
-                Some(YTItem::Playlist(PlaylistItem {
-                    id: browse_id,
-                    title,
-                    author: segments.first().map(|seg| seg.join(" ")),
-                    thumbnail_url,
-                    song_count: None,
-                }))
-            }
+            Some("MUSIC_PAGE_TYPE_PLAYLIST") => Some(YTItem::Playlist(PlaylistItem {
+                id: browse_id,
+                title,
+                author: playlist_author(&flex_text_runs(&flex_columns, 1)),
+                thumbnail_url,
+                song_count: None,
+            })),
             Some("MUSIC_PAGE_TYPE_PODCAST_SHOW_DETAIL_PAGE") => {
                 Some(YTItem::Podcast(PodcastItem {
                     browse_id,
@@ -532,10 +538,17 @@ impl AlbumItem {
             .map(|id| format!("https://music.youtube.com/playlist?list={id}"))
     }
 
+    /// Card subtitle: "Album • Artist • 2026", "Single • Artist" or "2013".
     pub fn from(renderer: &JsonDict) -> Option<AlbumItem> {
+        let runs = InnerTubeDecode::array(&["subtitle", "runs"], renderer).unwrap_or_default();
         Some(AlbumItem {
             browse_id: extract_two_row_browse_id(renderer)?.to_string(),
             title: two_row_title(renderer),
+            artists: credits_to_artists(&runs),
+            year: runs
+                .iter()
+                .filter_map(|run| as_string(run.get("text")))
+                .find_map(parse_year),
             thumbnail_url: extract_two_row_thumbnail(renderer),
             playlist_id: extract_playlist_id(renderer).map(str::to_string),
             ..AlbumItem::default()
@@ -584,9 +597,9 @@ impl PlaylistItem {
         Some(PlaylistItem {
             id: extract_two_row_browse_id(renderer)?.to_string(),
             title: two_row_title(renderer),
-            author: InnerTubeJSON::runs_texts(as_dict(renderer.get("subtitle")))
-                .into_iter()
-                .next(),
+            author: playlist_author(
+                &InnerTubeDecode::array(&["subtitle", "runs"], renderer).unwrap_or_default(),
+            ),
             thumbnail_url: extract_two_row_thumbnail(renderer),
             song_count: None,
         })

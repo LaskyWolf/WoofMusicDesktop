@@ -105,6 +105,26 @@ fn parse_suggestions_reads_the_text_suggestions() {
 }
 
 #[test]
+fn search_playlist_author_is_the_owner_not_the_kind_word() {
+    let sections = sections();
+    let playlists = &named(&sections, "Playlists").items;
+    for item in playlists {
+        let YTItem::Playlist(playlist) = item else {
+            panic!("not a playlist: {item:?}");
+        };
+        assert_ne!(
+            playlist.author.as_deref(),
+            Some("Playlist"),
+            "{}",
+            playlist.title
+        );
+    }
+    // Row byline: "Playlist • Christian Isbej • 687 views".
+    assert!(playlists.iter().any(|p| matches!(p,
+        YTItem::Playlist(p) if p.author.as_deref() == Some("Christian Isbej"))));
+}
+
+#[test]
 fn top_result_playlist_id_loses_only_the_vl_prefix() {
     let response = serde_json::json!({ "contents": { "sectionListRenderer": { "contents": [
         { "musicCardShelfRenderer": {

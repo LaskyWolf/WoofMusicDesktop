@@ -29,6 +29,7 @@ const JUNK_LABELS: &[&str] = &[
     "ep",
     "audiobook",
     "playlist",
+    "chart",
     "released",
     "year",
     "plays",

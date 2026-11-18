@@ -21,8 +21,7 @@ use swiftytube::networking::inner_tube_json::InnerTubeJSON;
 use super::mood_card::MoodFamily;
 use crate::networking::models::home_page::{ExploreSection, ExploreSectionKind, MoodItem};
 use crate::networking::models::home_page_parser::HomePageParser;
-use crate::networking::models::yt_item::{SongItem, YTArtist, YTItem};
-use swiftytube::sync::artist_credits::ArtistCredits;
+use crate::networking::models::yt_item::{SongItem, YTItem};
 use swiftytube::sync::browse_lens::BrowseLens;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
 use swiftytube::sync::regional_charts::RegionalCharts;
@@ -159,9 +158,8 @@ impl ExploreViewModel {
     // MARK: - New releases
 
     /// Finds the new releases shelf (header browseId `FEmusic_new_releases_albums`)
-    /// and fills its albums' artists, year and kind from the card subtitle
-    /// ("Single • Artist", "Album • Artist • 2026"), which the shared
-    /// two-row parser leaves out.
+    /// and reads each card's kind from its subtitle ("Single • Artist",
+    /// "Album • Artist • 2026"). Artists and year come from `AlbumItem::from`.
     pub fn apply_new_release_details(
         json: &JsonDict,
         sections: &mut [ExploreSection],
@@ -180,7 +178,6 @@ impl ExploreViewModel {
             .position(|s| s.kind == ExploreSectionKind::Cards && s.title == title)?;
 
         let mut kinds = HashMap::new();
-        let mut details: HashMap<String, (Vec<YTArtist>, Option<i64>)> = HashMap::new();
         for content in as_dict_list(raw.get("contents")).unwrap_or_default() {
             let Some(two_row) = as_dict(content.get("musicTwoRowItemRenderer")) else {
                 continue;
@@ -189,45 +186,19 @@ impl ExploreViewModel {
                 &["navigationEndpoint", "browseEndpoint", "browseId"],
                 two_row,
             );
-            let mut runs =
-                InnerTubeDecode::array(&["subtitle", "runs"], two_row).unwrap_or_default();
-            let Some(browse_id) = browse_id.filter(|_| !runs.is_empty()) else {
-                continue;
-            };
+            let first_run = InnerTubeDecode::array(&["subtitle", "runs"], two_row)
+                .and_then(|runs| runs.first().copied());
             // A first run without a link is the kind, not an artist.
-            if runs[0]
-                .get("navigationEndpoint")
-                .is_none_or(|v| v.is_null())
-                && let Some(kind) = as_string(runs[0].get("text"))
+            if let (Some(browse_id), Some(first_run)) = (browse_id, first_run)
+                && first_run
+                    .get("navigationEndpoint")
+                    .is_none_or(|v| v.is_null())
+                && let Some(kind) = as_string(first_run.get("text"))
             {
                 kinds.insert(browse_id.to_string(), kind.trim().to_string());
-                runs.remove(0);
             }
-            let year = runs
-                .last()
-                .and_then(|r| as_string(r.get("text")))
-                .map(str::trim)
-                .filter(|t| t.len() == 4)
-                .and_then(|t| t.parse().ok());
-            let artists = ArtistCredits::parse(&runs)
-                .into_iter()
-                .map(YTArtist::from)
-                .collect();
-            details.insert(browse_id.to_string(), (artists, year));
         }
 
-        for item in &mut sections[index].items {
-            let YTItem::Album(album) = item else {
-                continue;
-            };
-            let Some((artists, year)) = details.get(&album.browse_id) else {
-                continue;
-            };
-            if album.artists.is_empty() {
-                album.artists.clone_from(artists);
-            }
-            album.year = album.year.or(*year);
-        }
         Some(NewReleases {
             section_id: sections[index].id,
             kinds,
