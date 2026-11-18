@@ -18,6 +18,10 @@
 //! `BeatMix::step`), and the player sends them to mpv.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 
 use super::mix_planner::{self, Cues, Mix, Style};
 use super::track_analyzer::{BEATS_PER_BAR, SAMPLE_RATE, TrackAnalysis};
@@ -53,15 +57,44 @@ pub const HIGH_PASS_LABEL: &str = "automixhp";
 pub const LOW_PASS_LABEL: &str = "automixlp";
 pub const EFFECTS_LABEL: &str = "automixfx";
 
-/// Swift `SettingsStore` transition settings, with its defaults.
-#[derive(Clone, Debug, PartialEq)]
+/// Swift `SettingsStore` transition settings, with its defaults and its
+/// `UserDefaults` keys. Missing keys read as the defaults.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TransitionSettings {
+    #[serde(rename = "settings.autoMixEnabled")]
     pub auto_mix_enabled: bool,
+    #[serde(rename = "settings.crossfadeEnabled")]
     pub crossfade_enabled: bool,
     /// Smart Crossfade length, 1...12 s.
+    #[serde(rename = "settings.crossfadeSeconds")]
     pub crossfade_seconds: f64,
     /// Strength of the AutoMix effects (echo, wash, filter sweep), 0...1.
+    #[serde(rename = "settings.transitionEffects")]
     pub transition_effects: f64,
+}
+
+impl TransitionSettings {
+    /// `transition_defaults.json` next to `IncrementalSyncService::default_defaults_path()`.
+    pub fn default_path() -> Option<PathBuf> {
+        IncrementalSyncService::default_defaults_path()
+            .map(|path| path.with_file_name("transition_defaults.json"))
+    }
+
+    /// A missing or unreadable file reads as the defaults.
+    pub fn load(path: &Path) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, serde_json::to_vec(self)?)
+    }
 }
 
 impl Default for TransitionSettings {

@@ -1056,3 +1056,27 @@ fn ffmpeg_decode_args_and_samples() {
         .collect();
     assert_eq!(crossfade::samples_from_f32le(&bytes), [0.5, -1.0]);
 }
+
+#[test]
+fn transition_settings_save_with_swift_keys() {
+    let dir = std::env::temp_dir().join(format!("woof-transitions-{}", std::process::id()));
+    let path = dir.join("transition_defaults.json");
+    let settings = trop::audio::crossfade::TransitionSettings {
+        auto_mix_enabled: true,
+        crossfade_seconds: 9.0,
+        ..Default::default()
+    };
+    settings.save(&path).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("\"settings.autoMixEnabled\":true"));
+    assert_eq!(
+        trop::audio::crossfade::TransitionSettings::load(&path),
+        settings
+    );
+    // A missing file reads as the defaults.
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        trop::audio::crossfade::TransitionSettings::load(&path),
+        Default::default()
+    );
+}

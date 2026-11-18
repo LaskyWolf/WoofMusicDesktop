@@ -11,7 +11,9 @@ Status: rewrite in progress, nothing to install yet. See [docs/MILESTONES.md](do
    - Arch: `sudo pacman -S mpv`
    - Debian 12 / Ubuntu 24.04: `sudo apt install libmpv-dev`
    - Fedora: `sudo dnf install mpv-libs-devel`
-3. Run:
+3. Optional: install `ffmpeg` (Arch `sudo pacman -S ffmpeg`, Debian/Ubuntu `sudo apt install ffmpeg`, Fedora `sudo dnf install ffmpeg-free`).
+   AutoMix uses it to find each song's beat; without it, AutoMix falls back to a Smart Crossfade.
+4. Run:
 
 ```bash
 cargo run -p woofmusic --release   # the app

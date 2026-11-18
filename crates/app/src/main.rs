@@ -383,6 +383,8 @@ pub enum Message {
     Download(downloads::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
+    /// A Playback setting changed: transitions use it from the next song.
+    Transitions(TransitionSettings),
 }
 
 impl App {
@@ -424,7 +426,7 @@ impl App {
             transitions: services
                 .player
                 .clone()
-                .map(|player| Transitions::new(player, dev_transitions())),
+                .map(|player| Transitions::new(player, transition_settings())),
             // Dev aid: WOOF_SIGNED_IN=1 shows the signed-in pages without a session.
             session: if std::env::var("WOOF_SIGNED_IN").is_ok() {
                 Session::SignedIn(None)
@@ -855,6 +857,21 @@ impl App {
                 }
             }
             Message::Settings(message) => self.settings.update(message),
+            Message::Transitions(settings) => {
+                let Some(transitions) = &mut self.transitions else {
+                    return Task::none();
+                };
+                transitions.settings = settings.clone();
+                let Some(path) = TransitionSettings::default_path() else {
+                    return Task::none();
+                };
+                Task::future(tokio::task::spawn_blocking(move || {
+                    if let Err(error) = settings.save(&path) {
+                        eprintln!("Playback settings were not saved: {error}");
+                    }
+                }))
+                .discard()
+            }
             Message::Snapshot(shot) => {
                 let path = std::env::var("WOOF_SNAPSHOT").expect("set when the snapshot runs");
                 if let Err(error) = save_png(&path, &shot) {
@@ -1200,7 +1217,9 @@ impl App {
                 ),
             },
             Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
-            Route::Settings => self.settings.view(),
+            Route::Settings => self
+                .settings
+                .view(self.transitions.as_ref().map(|t| &t.settings)),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
@@ -1504,18 +1523,23 @@ fn dev_route() -> Option<Route> {
     }
 }
 
-/// Dev aid until Settings has them: WOOF_CROSSFADE=6 turns Smart Crossfade on
-/// for 6 s, WOOF_AUTOMIX=1 turns AutoMix on.
-fn dev_transitions() -> TransitionSettings {
-    let crossfade = std::env::var("WOOF_CROSSFADE")
+/// The saved Playback settings. Dev aids: WOOF_CROSSFADE=6 turns Smart
+/// Crossfade on for 6 s and WOOF_AUTOMIX=1 turns AutoMix on, for this run only.
+fn transition_settings() -> TransitionSettings {
+    let mut settings = TransitionSettings::default_path()
+        .map(|path| TransitionSettings::load(&path))
+        .unwrap_or_default();
+    if let Some(seconds) = std::env::var("WOOF_CROSSFADE")
         .ok()
-        .and_then(|seconds| seconds.parse::<f64>().ok());
-    TransitionSettings {
-        auto_mix_enabled: std::env::var("WOOF_AUTOMIX").is_ok(),
-        crossfade_enabled: crossfade.is_some(),
-        crossfade_seconds: crossfade.unwrap_or(6.0).clamp(1.0, 12.0),
-        ..TransitionSettings::default()
+        .and_then(|seconds| seconds.parse::<f64>().ok())
+    {
+        settings.crossfade_enabled = true;
+        settings.crossfade_seconds = seconds.clamp(1.0, 12.0);
     }
+    if std::env::var("WOOF_AUTOMIX").is_ok() {
+        settings.auto_mix_enabled = true;
+    }
+    settings
 }
 
 /// Dev aid: WOOF_SEEK_END=45 jumps to 45 s before the end of the first song,

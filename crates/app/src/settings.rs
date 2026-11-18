@@ -2,8 +2,9 @@
 //! (Discord, Last.fm, ListenBrainz, Odesli), and the player bar's "Copy song link".
 
 use iced::font::Weight;
-use iced::widget::{Space, button, column, container, row, text, text_input, toggler};
+use iced::widget::{Space, button, column, container, row, slider, text, text_input, toggler};
 use iced::{Alignment, Background, Border, Color, Element, Length, Task};
+use trop::audio::crossfade::TransitionSettings;
 use trop::odesli::odesli_defaults::OdesliDefaults;
 
 use crate::integrations::{self, Action, Status};
@@ -148,7 +149,11 @@ impl State {
         }
     }
 
-    pub fn view(&self) -> Element<'_, crate::Message> {
+    /// `transitions` is `None` without libmpv: no Playback group then.
+    pub fn view<'a>(
+        &'a self,
+        transitions: Option<&'a TransitionSettings>,
+    ) -> Element<'a, crate::Message> {
         let Some(status) = &self.status else {
             return ui::status(
                 self.error.as_deref(),
@@ -158,6 +163,16 @@ impl State {
         let mut page = column![
             text("Settings").size(32).font(theme::weight(Weight::Bold)),
             Space::new().height(20),
+        ]
+        .max_width(720);
+        if let Some(transitions) = transitions {
+            page = page
+                .push(ui::section_title("Playback"))
+                .push(Space::new().height(14))
+                .push(playback(transitions))
+                .push(Space::new().height(28));
+        }
+        let mut page = page.extend([column![
             ui::section_title("Integrations"),
             Space::new().height(4),
             text("Share what you play with other services.")
@@ -171,7 +186,7 @@ impl State {
                 odesli(status),
             ]),
         ]
-        .max_width(720);
+        .into()]);
         if let Some(error) = &self.error {
             page = page.push(Space::new().height(10)).push(error_text(error));
         }
@@ -322,6 +337,66 @@ fn odesli<'a>(status: &Status) -> Element<'a, crate::Message> {
     )
 }
 
+/// Swift `PlayerSettingsView`'s transitions: AutoMix, Smart Crossfade and its length.
+fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
+    let set = move |change: fn(&mut TransitionSettings, bool)| {
+        let settings = settings.clone();
+        move |on| {
+            let mut settings = settings.clone();
+            change(&mut settings, on);
+            crate::Message::Transitions(settings)
+        }
+    };
+    let mut rows = vec![
+        setting(
+            "AutoMix",
+            caption(
+                "Blends songs like a DJ: matches their tempo, keeps the beats together and \
+                 swaps the bass on the bar. Songs without a steady beat get a Smart Crossfade.",
+            ),
+            Some(toggle(
+                settings.auto_mix_enabled,
+                set(|s, on| s.auto_mix_enabled = on),
+            )),
+        ),
+        setting(
+            "Smart Crossfade",
+            caption("Fades into the next song where the current one winds down."),
+            Some(toggle(
+                settings.crossfade_enabled,
+                set(|s, on| s.crossfade_enabled = on),
+            )),
+        ),
+    ];
+    if settings.crossfade_enabled {
+        let seconds = settings.crossfade_seconds;
+        let length = {
+            let settings = settings.clone();
+            move |seconds| {
+                crate::Message::Transitions(TransitionSettings {
+                    crossfade_seconds: seconds,
+                    ..settings.clone()
+                })
+            }
+        };
+        rows.push(
+            row![
+                text(format!("Fade {} s", seconds.round() as i64))
+                    .size(14)
+                    .width(Length::Fixed(72.0)),
+                slider(1.0..=12.0, seconds, length)
+                    .step(1.0)
+                    .style(crate::seek_style),
+            ]
+            .spacing(16)
+            .padding([14, 18])
+            .align_y(Alignment::Center)
+            .into(),
+        );
+    }
+    group(rows)
+}
+
 /// Rows on one rounded surface, a hairline between each.
 fn group(rows: Vec<Element<'_, crate::Message>>) -> Element<'_, crate::Message> {
     let mut list = column![];
@@ -380,8 +455,17 @@ fn error_text<'a>(error: &'a str) -> Element<'a, crate::Message> {
 }
 
 fn switch<'a>(on: bool, action: fn(bool) -> Action) -> Element<'a, crate::Message> {
+    toggle(on, move |on| {
+        crate::Message::Settings(Message::Set(action(on)))
+    })
+}
+
+fn toggle<'a>(
+    on: bool,
+    message: impl Fn(bool) -> crate::Message + 'a,
+) -> Element<'a, crate::Message> {
     toggler(on)
-        .on_toggle(move |on| crate::Message::Settings(Message::Set(action(on))))
+        .on_toggle(message)
         .size(22)
         .style(|theme, status| {
             let on = matches!(

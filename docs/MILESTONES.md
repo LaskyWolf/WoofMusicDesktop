@@ -63,7 +63,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 
 ## R6: Player features
 
-- [ ] Two-deck player: Crossfade and AutoMix
+- [x] Two-deck player: Crossfade and AutoMix
 - [x] Lyrics (LRCLIB, Musixmatch and the other Trop providers), romanization
 - [x] Downloads for offline play
 - [x] Media keys and system media panel: MPRIS on Linux, SMTC on Windows (`playwire`)
