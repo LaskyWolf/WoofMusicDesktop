@@ -37,13 +37,25 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
 | `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
 | `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
+| `protocol LyricsProvider` (`async throws`) | trait `LyricsProvider`; `fetch(&query, &session)` returns a boxed `Send` future (`LyricsFuture`) |
+| `URLSession.shared` in lyrics providers | SwiftyTube's `Session`, passed to `LyricsManager::new`; tests use `Session::mock` |
+| `LyricsError` vs other thrown errors (`URLError`) | one `LyricsError` enum; `Transport` and `TimedOut` are network errors, `is_answer()` is Swift's `error is LyricsError` |
+| `withTaskGroup` race in `LyricsManager` | `tokio::task::JoinSet`; dropping it aborts the providers still running |
+| `Decodable` responses (Kugou, Genius) and `as? Bool` | untyped JSON; `lyrics_http::as_bool` also reads 0 / 1, as `NSNumber` bridging does |
+| `NSData.decompressed(using: .zlib)` (KRC) | `flate2::read::DeflateDecoder` |
+| `LyricsService` reading `NowPlaying` / the queue | the caller passes a `LyricsSong` |
+| `UserDefaults` in `LyricsService` | a JSON object file (`LyricsService::default_defaults_path()`: `WoofMusic/lyrics_defaults.json`), same keys |
+| `LyricsState.shared` (`@MainActor @Observable`) | `LyricsService::state()` snapshot; provider names keyed by video id |
+| `LyricsSettings` + `SettingsStore.disabledLyricsProviders` | `LyricsManager::settings` (`Mutex<LyricsSettings>`), not persisted yet |
+| `LyricsView.updateActiveLine` / `detectGaps` | `lyrics_view.rs`: `active_line_index`, `detect_gaps`, `display_lines` |
+| `String.decodingHTMLEntities()` | `StringApp` trait on `str` (`utilities/string_app.rs`) |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`).
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`), `Audio/Lyrics/` (`Providers/`, `LyricsService`, `LyricsManager`, the line lookup of `LyricsView`), `Utilities/String+App` (`decodingHTMLEntities`).
 
-Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync.
+Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync, the lyrics views (`LyricsView`, `LyricsOptionsMenu`, `LyricShareCard`, `ShareCardStudio`, `KaraokeCountdown`) and lyrics translation.
 
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`. `lyrics_test.rs` ports `LyricsParsing.selfCheck` and runs each provider on `crates/fixtures/lyrics/` through a mock `Session`.
