@@ -44,6 +44,16 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `FFmpegKit` decode in `Crossfade.decode` | `crossfade::ffmpeg_args` for an `ffmpeg` process, bytes through `samples_from_f32le` into `track_analyzer::analyze` |
 | `TrackAnalyzer.Result` | `TrackAnalysis` (`Result` would shadow Rust's) |
 | `Crossfade.history` (Diagnostics) and the plan summary line | not ported (no Diagnostics screen); `plan_ready` logs a short summary |
+| `UserDefaults` in `LastFMDefaults`, `ListenBrainzDefaults` | `LastFMSettings`, `ListenBrainzSettings`: serde structs with the Swift keys, each in its own JSON file next to `sync_defaults.json` (`default_path()`) |
+| `LASTFM_API_KEY` / `LASTFM_SECRET` from the environment or Info.plist | the environment at run time, else `option_env!` at build time |
+| Keychain `SecureStore` in `LastFMTokenStore`, `ListenBrainz`, `Odesli` | SwiftyTube's keyring `SecureStore`, same service and account names (first profile: unscoped) |
+| `CryptoKit` `Insecure.MD5` (Last.fm `api_sig`) | `md-5` crate |
+| `NowPlaying.shared` read by `LastFMIntegration` and `ListenBrainz` | a `PlayingSong` snapshot the app passes to `LastFMIntegration::sync_state` (every second and on each change) and `ListenBrainz::tick` (4 times a second) |
+| `LastFMIntegration` scrobble `Task.sleep` timer | a deadline checked by `sync_state`; a scrobble goes out up to one call late |
+| Detached `Task` sends in `LastFMIntegration`, `ListenBrainz` | awaited inside `sync_state` / `tick` |
+| `SettingsStore.isIncognito` | `incognito` field on `LastFMIntegration` and `ListenBrainz` |
+| `LastFMAuthWebView` (WKWebView + polling) | `LastFMService::start_sign_in` (token + approval URL to open in the browser) and `complete_sign_in` (polls `auth.getSession` every 2 s, stores the session) |
+| `MusicLink(odesliResponse:)`, `MusicLink.isConvertible` | `Odesli::youtube_link` (the URL, not a parsed `MusicLink`), `Odesli::is_convertible` |
 
 ## Status
 
@@ -54,7 +64,8 @@ Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGen
 ## Wiring crossfade and AutoMix
 
 The player needs a spare `MpvDeck` and `filterChain` (R6) first. Then: call `Crossfade::tick` every 0.25 s with a `NowPlayingState` and the live `TransitionSettings`, and act on the `Action`. `Plan`: resolve the next song's URL and loudness, run `ffmpeg` with `ffmpeg_args` for `TAIL_SECONDS` from the end of the playing file and `HEAD_SECONDS` from the start of the next one, `analyze` both, then call `plan_ready` (or `plan_failed`). `LoadIncoming`: set `incoming_properties` and the `af` chain (`plan.incoming_bass_gain()`, `plan.echo_delay`) on the spare deck, `loadfile`, then `deck_loaded`/`deck_failed` from its events. `StartMix`: sleep `wait`, `begin`, unpause the spare deck, then every 50 ms either `fade_gains(fade_progress(..))` or `BeatMix::step`, send volumes through `mpv_volume` and effects with `af-command`, call `promote` at progress 0.5 (then `promoteSpare` and advance NowPlaying), and on done send `tail_cut_effects` and wait `BeatMix::tail` before `complete`. A new song or stop calls `reset`; pause, seek and speed changes call `finish_now`; the outgoing deck's EOF during a mix calls `outgoing_ended`. The analysis needs only mono 32-bit float samples at 11 025 Hz; no Apple framework or network service is involved.
+Integrations translated: `LastFM/` (service, integration, defaults, token store, the logic of `LastFMAuthWebView`), `ListenBrainz/` (all but the settings view), `Odesli/` (all but the settings view). Not ported: Last.fm's legacy migrations (session key in `UserDefaults`, keychain `username` and `subscriber`), the unused `lastFMLikeChanged` observer, an offline queue for failed sends.
 
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`. `scrobbling_test.rs` and `odesli_test.rs` run Last.fm, ListenBrainz and Odesli on `crates/fixtures/{last_fm,listen_brainz,odesli}/` with keyring-core's mock store.
