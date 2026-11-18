@@ -5,9 +5,9 @@
 //! becomes a history event and a monthly play count.
 //!
 //! Swift is an actor with its own 5 s timer. Here the caller passes the time
-//! in and saves what each call returns with [`save`], off the UI thread.
-// ponytail: no `YouTubeHistoryReport`: plays reach this database, not the
-// account's YouTube Music history. Add it with the YouTube history pings.
+//! in and saves what each call returns with [`save`], off the UI thread. The
+//! caller also owns the play's `YouTubeHistoryReport`, started on a
+//! `PlayRecord::Playback` and fed [`PlaybackStateService::elapsed`].
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -46,7 +46,8 @@ pub struct PlaybackStateService {
 }
 
 impl PlaybackStateService {
-    fn elapsed(&self, now: Instant) -> Duration {
+    /// Play time of the current song; paused time never counts.
+    pub fn elapsed(&self, now: Instant) -> Duration {
         self.played_before + self.resumed_at.map_or(Duration::ZERO, |at| now - at)
     }
 

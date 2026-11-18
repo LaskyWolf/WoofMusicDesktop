@@ -364,7 +364,7 @@ fn tinted<'a>(glyph: &'static [u8], size: f32, color: Color) -> Element<'a, Mess
 }
 
 /// A small round icon button with the hover wash.
-fn icon_button<'a>(glyph: &'static [u8], message: Message) -> Element<'a, Message> {
+pub(crate) fn icon_button<'a>(glyph: &'static [u8], message: Message) -> Element<'a, Message> {
     button(ui::icon(glyph, 18.0))
         .padding(8)
         .on_press(message)
@@ -381,7 +381,10 @@ fn icon_button<'a>(glyph: &'static [u8], message: Message) -> Element<'a, Messag
 }
 
 /// A label shown above `control` on hover: the icon buttons have no text.
-fn hint<'a>(control: impl Into<Element<'a, Message>>, label: String) -> Element<'a, Message> {
+pub(crate) fn hint<'a>(
+    control: impl Into<Element<'a, Message>>,
+    label: String,
+) -> Element<'a, Message> {
     tooltip(
         control,
         container(text(label).size(12))

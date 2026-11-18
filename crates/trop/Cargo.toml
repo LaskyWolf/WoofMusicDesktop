@@ -9,6 +9,7 @@ base64 = "0.22.1"
 fastrand = "2"
 flate2 = "1.1.11"
 form_urlencoded = "1.2.2"
+jiff = "0.2.46"
 libmpv2 = { version = "7", default-features = false }
 log = "0.4.35"
 md-5 = "0.11.0"

@@ -1,10 +1,12 @@
 //! Rust translation of the WoofMusic app logic (`Trop/`). See README.md for the mirror rules.
 
+pub mod activity;
 pub mod audio;
 pub mod database;
 pub mod detail;
 pub mod discord;
 pub mod explore;
+pub mod history;
 pub mod home;
 pub mod last_fm;
 pub mod listen_brainz;

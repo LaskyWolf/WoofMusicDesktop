@@ -683,3 +683,167 @@ pub fn songs<'a>(
     });
     ui::scroll_page(page)
 }
+
+/// Swift `HistoryScreenView`: plays by day, newest first, with a search field.
+/// Plays from this app can be deleted; YouTube Music's own rows only play.
+pub fn history<'a>(
+    covers: &'a Covers,
+    feeds: &'a crate::feeds::Feeds,
+    playing: Option<&str>,
+) -> Element<'a, Message> {
+    use crate::downloads::{hint, icon_button, icons};
+    use crate::feeds::Msg;
+
+    let field = text_input("Search your history", &feeds.query)
+        .on_input(|query| Message::Feeds(Msg::Query(query)))
+        .size(16)
+        .padding([12, 16])
+        .style(ui::field_style);
+    let mut page = vec![
+        page_title("History"),
+        container(field).max_width(640).into(),
+    ];
+    let history = &feeds.history;
+    let days = history.filtered(&feeds.query);
+    if history.is_loading {
+        page.push(text("Loading…").color(theme::SECONDARY).into());
+    } else if days.is_empty() {
+        page.push(empty_note(
+            if feeds.query.trim().is_empty() {
+                "No History"
+            } else {
+                "No Results"
+            },
+            if feeds.query.trim().is_empty() {
+                "Songs you play will appear here."
+            } else {
+                "Check the spelling or try another search."
+            },
+        ));
+    }
+    // One queue for the whole list, so a play goes on through the days below it.
+    // ponytail: filtered and cloned on every redraw; cache it in `Feeds` if a long history stutters.
+    let songs: Arc<Vec<SongItem>> = Arc::new(
+        days.iter()
+            .flat_map(|day| day.rows.iter().map(|row| row.song.clone()))
+            .collect(),
+    );
+    let mut index = 0;
+    for day in &days {
+        let rows = day.rows.iter().map(|row| {
+            let is_playing = playing == Some(row.song.video_id.as_str());
+            let subtitle = ui::artists(&row.song.artists);
+            let track = ui::track_row(covers, &songs, index, true, is_playing, subtitle, None);
+            index += 1;
+            let delete: Element<'a, Message> = match row.event.as_ref().and_then(|e| e.id) {
+                Some(id) => hint(
+                    icon_button(icons::TRASH, Message::Feeds(Msg::Delete(id))),
+                    "Delete from History".to_owned(),
+                ),
+                // From YouTube Music only: nothing here to delete.
+                None => Space::new().width(34).into(),
+            };
+            row![container(track).width(Length::Fill), delete]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
+        });
+        page.push(
+            column![
+                text(day.title.clone())
+                    .size(22)
+                    .font(theme::weight(Weight::Bold)),
+                column(rows.collect::<Vec<_>>()).spacing(2)
+            ]
+            .spacing(10)
+            .into(),
+        );
+    }
+    // YouTube Music's own history has no next page: only this app's plays load more.
+    if history.has_more_local && feeds.query.trim().is_empty() {
+        page.push(ui::pill_button(
+            "Show older plays",
+            Message::Feeds(Msg::More),
+        ));
+    }
+    ui::scroll_page(page)
+}
+
+/// Swift `ActivityView`: new releases from followed artists, newest first.
+/// A dot marks the ones not seen yet; `None` while the first load runs.
+pub fn activity<'a>(
+    covers: &'a Covers,
+    items: Option<&'a [trop::activity::activity_store::ActivityItem]>,
+) -> Element<'a, Message> {
+    let mut page = vec![page_title("New releases")];
+    match items {
+        None => page.push(
+            text("Checking the artists you follow…")
+                .color(theme::SECONDARY)
+                .into(),
+        ),
+        Some([]) => page.push(empty_note(
+            "No New Releases",
+            "Albums and singles from artists you follow, out in the last 60 days, appear here.",
+        )),
+        Some(items) => page.push(
+            column(items.iter().map(|item| {
+                let mut lines = column![
+                    text(&item.message)
+                        .size(14)
+                        .font(theme::weight(Weight::Medium))
+                ]
+                .spacing(2)
+                .width(Length::Fill);
+                if let Some(time) = &item.time {
+                    lines = lines.push(text(time).size(13).color(theme::SECONDARY));
+                }
+                let dot: Element<'a, Message> = if item.is_read {
+                    Space::new().width(10).into()
+                } else {
+                    container(Space::new())
+                        .width(10)
+                        .height(10)
+                        .style(|_| container::Style {
+                            background: Some(Background::Color(theme::ACCENT)),
+                            border: Border::default().rounded(5),
+                            ..container::Style::default()
+                        })
+                        .into()
+                };
+                let content = row![
+                    ui::cover(covers, item.thumbnail.as_deref(), ui::ROW_COVER, 8.0),
+                    lines,
+                    dot
+                ]
+                .spacing(14)
+                .align_y(Alignment::Center);
+                let open = item
+                    .album_id
+                    .clone()
+                    .map(|album| Message::Feeds(crate::feeds::Msg::Open(item.id.clone(), album)));
+                ui::clickable(container(content).padding([6, 8]), open, 0.0)
+            }))
+            .spacing(2)
+            .into(),
+        ),
+    }
+    ui::scroll_page(page)
+}
+
+fn page_title(title: &str) -> Element<'_, Message> {
+    text(title)
+        .size(28)
+        .font(theme::weight(Weight::Bold))
+        .into()
+}
+
+/// What an empty list says: a title and one line under it.
+fn empty_note<'a>(title: &'a str, line: &'a str) -> Element<'a, Message> {
+    column![
+        text(title).size(18).font(theme::weight(Weight::Bold)),
+        text(line).size(14).color(theme::SECONDARY),
+    ]
+    .spacing(6)
+    .into()
+}
