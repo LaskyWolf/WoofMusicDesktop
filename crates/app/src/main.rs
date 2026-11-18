@@ -9,6 +9,7 @@ mod login;
 mod media_controls;
 mod now_playing;
 mod pages;
+mod playlist_edit;
 mod services;
 mod settings;
 mod song_menu;
@@ -330,6 +331,7 @@ struct App {
     sponsor: SponsorBlock,
     /// Where podcast episodes and long videos stopped.
     episodes: EpisodePlaybackStore,
+    playlist_edit: playlist_edit::State,
 }
 
 pub enum Session {
@@ -437,6 +439,8 @@ pub enum Message {
     SignInDone(bool),
     Account(Result<AccountInfo, String>),
     Download(downloads::Msg),
+    /// Creating, renaming, deleting and editing playlists.
+    PlaylistEdit(playlist_edit::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
     /// A Playback setting changed: transitions use it from the next song.
@@ -538,6 +542,7 @@ impl App {
             episodes: EpisodePlaybackStore::default_path()
                 .map(|path| EpisodePlaybackStore::load(&path))
                 .unwrap_or_default(),
+            playlist_edit: playlist_edit::State::default(),
         };
         app.player.queue.is_repeat_on = app.defaults.repeat;
         app.speed.podcast_rate = app.defaults.podcast_speed;
@@ -838,6 +843,7 @@ impl App {
                 ])
             }
             Message::Download(message) => self.update_download(message),
+            Message::PlaylistEdit(message) => self.update_playlist_edit(message),
             Message::Account(result) => {
                 if !matches!(self.session, Session::SignedIn(_)) {
                     return Task::none();
@@ -1895,9 +1901,13 @@ impl App {
             Route::Home => pages::home(covers, &self.home, playing),
             Route::Library => match &self.session {
                 Session::SignedIn(_) => match &self.library {
-                    Some(Load::Loaded(library)) => {
-                        pages::library(covers, library, self.library_filter, self.syncing)
-                    }
+                    Some(Load::Loaded(library)) => pages::library(
+                        covers,
+                        library,
+                        self.library_filter,
+                        self.syncing,
+                        &self.playlist_edit,
+                    ),
                     Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                     _ => ui::status(None, Message::Retry),
                 },
@@ -1936,7 +1946,16 @@ impl App {
                         shelves,
                     } => pages::artist(covers, info, songs, shelves, playing),
                     Detail::Playlist { info, songs } => {
-                        pages::playlist(covers, info, songs, playing)
+                        let in_library = matches!(&self.library, Some(Load::Loaded(library))
+                            if library.playlists.iter().any(|(item, _)| item.id() == info.playlist_id));
+                        pages::playlist(
+                            covers,
+                            info,
+                            songs,
+                            playing,
+                            &self.playlist_edit,
+                            in_library,
+                        )
                     }
                     Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
                     Detail::Mood(sections) => pages::explore(covers, sections, playing),
@@ -2626,6 +2645,7 @@ mod tests {
             episodes: EpisodePlaybackStore::default(),
             report: None,
             feeds: feeds::Feeds::default(),
+            playlist_edit: playlist_edit::State::default(),
         }
     }
 

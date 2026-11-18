@@ -73,7 +73,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [ ] Radio options (style, length, explicit) and New Playlist in Add to Playlist (`RadioOptions`, `RadioViews`)
 - [ ] Restore the queue and the playing song at launch (`NowPlaying.restoreQueueIfNeeded`)
 - [ ] Queue editing: drag to reorder; remove is in the song menu (`QueueView`)
-- [ ] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
+- [x] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
 - [x] History page and play reports to YouTube Music history (`History/`, `YouTubeHistoryReport`)
 - [x] Activity: new releases from followed artists (`Activity/`); a sidebar badge replaces the iOS notifications
 - [x] Sleep timer, playback speed, equalizer (`SleepTimer`, `PlaybackSpeed`, `Equalizer`)

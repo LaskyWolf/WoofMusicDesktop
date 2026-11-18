@@ -685,8 +685,9 @@ impl InnerTubeClient {
 
     // MARK: - Helpers (Rust only: Swift writes each body literal inline)
 
-    /// `["context": contextDict(client:locale:)]`.
-    fn body(&self, client: Option<YouTubeClient>, locale: Option<&YouTubeLocale>) -> JsonDict {
+    /// `["context": contextDict(client:locale:)]`. Public for endpoints
+    /// without a method here (Trop's `get_panel`).
+    pub fn body(&self, client: Option<YouTubeClient>, locale: Option<&YouTubeLocale>) -> JsonDict {
         let mut body = JsonDict::new();
         body.insert("context".into(), self.context_dict(client.as_ref(), locale));
         body

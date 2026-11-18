@@ -89,6 +89,10 @@ pub struct PlaylistDetailInfo {
     /// The header facepile opens the "PAplaylist_collaborate" panel: a shared
     /// playlist whose collaborators can add and remove songs without owning it.
     pub is_collaborative: bool,
+
+    /// Rust-only: each song's `playlistSetVideoId`, in `songs` order. The
+    /// desktop app removes and moves rows with it (Swift reads the database).
+    pub set_video_ids: Vec<Option<String>>,
 }
 
 impl PlaylistDetailInfo {
