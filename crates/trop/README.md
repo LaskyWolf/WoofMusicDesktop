@@ -30,13 +30,20 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `ProfileStorage.databaseURL` | `DatabaseService::default_path()`: `$XDG_DATA_HOME` (or `~/.local/share`) / `%APPDATA%`, then `WoofMusic/trop.sqlite`; `reopen(path)` for another profile |
 | Fallback temp file, then `:memory:` | `:memory:` only; `uses_temporary_storage()` reports it |
 | Swift `throws` from GRDB | `rusqlite::Error`; `update` of a missing row is `QueryReturnedNoRows` (GRDB `recordNotFound`) |
+| `TropLibraryStore` (`async throws` over GRDB) | `TropLibraryStore` over `Arc<DatabaseService>`, implementing SwiftyTube's synchronous `LibrarySyncStore` |
+| `LibraryPages` called inside `applyArtistSync` / `applyAlbumSync` / `applyPlaylistSync` | not called there: SwiftyTube's `LibrarySyncService` already fetches every page and fails the section on a failed page, so each list is complete; `LibraryPages` stays for other callers |
+| `SignedInnerTube.post("browse", ...)` in `LibraryPages` | `InnerTubeClient::browse` on the `&InnerTubeClient` passed in |
+| `enum SyncBridge` with static members on `InnerTubeClient.tropShared` | `SyncBridge` struct built with `SyncBridge::new(client, db, defaults_path)` |
+| `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
+| `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
+| `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities).
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`).
 
-Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers.
+Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync.
 
 ## Tests
 
-`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases.
+`cargo test -p trop` runs offline against `crates/fixtures/trop/` and a mock session. Each test file mirrors a Dart file in `test/trop/` with the same cases. `database_test.rs` uses in-memory and temporary-file databases. `sync_services_test.rs` runs the library store on an in-memory database and the sync services on `crates/fixtures/sync/`.
