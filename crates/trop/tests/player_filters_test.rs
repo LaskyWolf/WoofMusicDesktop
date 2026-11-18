@@ -22,11 +22,24 @@ fn effects_graph_matches_swift() {
 fn filter_chain_labels_each_automix_filter() {
     let graph = effects_graph(None);
     assert_eq!(
-        filter_chain(Some(-24.0), None, true, true),
+        filter_chain(Some(-24.0), None, true, true, None),
         format!(
             "@automixbass:bass=f=180:g=-24.0000,@automixhp:highpass=f=1000:m=0,@automixlp:lowpass=f=1000:m=0,@automixfx:lavfi=graph=%{}%{graph}",
             graph.len()
         )
     );
-    assert_eq!(filter_chain(None, None, false, false), "");
+    assert_eq!(filter_chain(None, None, false, false, None), "");
+}
+
+#[test]
+fn equalizer_goes_last_like_swift() {
+    let gains = [7.0, 6.0, 4.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.5];
+    assert_eq!(
+        filter_chain(None, None, false, false, Some(&gains)),
+        "firequalizer=gain_entry=\"entry(60.0000,7.0000);entry(120.0000,6.0000);entry(250.0000,4.0000);entry(500.0000,2.0000);entry(1000.0000,1.0000);entry(2000.0000,0.0000);entry(4000.0000,0.0000);entry(8000.0000,0.0000);entry(12000.0000,0.0000);entry(16000.0000,-1.5000)\""
+    );
+    assert!(
+        filter_chain(Some(0.0), None, true, false, Some(&gains))
+            .starts_with("@automixbass:bass=f=180:g=0.0000,firequalizer=")
+    );
 }

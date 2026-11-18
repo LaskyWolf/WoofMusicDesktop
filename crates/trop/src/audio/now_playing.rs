@@ -182,13 +182,24 @@ impl Queue {
 
 /// What the player remembers between launches. Swift keeps repeat in
 /// `UserDefaults` and uses the system volume; the desktop app keeps its own.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PlayerDefaults {
     #[serde(rename = "nowPlaying.repeat")]
     pub repeat: bool,
     /// The volume slider, 0...1.
     pub volume: f64,
+    #[serde(rename = "settings.equalizerEnabled")]
+    pub equalizer_enabled: bool,
+    /// dB per band of `equalizer::FREQUENCIES`.
+    #[serde(rename = "settings.equalizerGains")]
+    pub equalizer_gains: Vec<f64>,
+    /// A preset's id, or `equalizer::CUSTOM`.
+    #[serde(rename = "settings.equalizerPresetID")]
+    pub equalizer_preset: String,
+    /// The speed last picked for a podcast episode.
+    #[serde(rename = "playback.podcastSpeed")]
+    pub podcast_speed: f64,
 }
 
 impl Default for PlayerDefaults {
@@ -196,11 +207,20 @@ impl Default for PlayerDefaults {
         Self {
             repeat: false,
             volume: 1.0,
+            equalizer_enabled: false,
+            equalizer_gains: vec![0.0; crate::audio::equalizer::FREQUENCIES.len()],
+            equalizer_preset: "flat".into(),
+            podcast_speed: 1.0,
         }
     }
 }
 
 impl PlayerDefaults {
+    /// The gains mpv applies: `None` while the equalizer is off.
+    pub fn equalizer(&self) -> Option<Vec<f64>> {
+        self.equalizer_enabled.then(|| self.equalizer_gains.clone())
+    }
+
     pub fn default_path() -> Option<std::path::PathBuf> {
         crate::audio::crossfade::TransitionSettings::default_path()
             .map(|path| path.with_file_name("player_defaults.json"))

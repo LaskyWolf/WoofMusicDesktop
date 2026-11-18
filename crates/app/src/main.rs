@@ -1,6 +1,7 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
 mod downloads;
+mod equalizer;
 mod glass;
 mod integrations;
 mod login;
@@ -30,7 +31,9 @@ use iced::{
 use swiftytube::streaming::stream_cache::StreamCache;
 use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
 use trop::audio::now_playing::{PlayerDefaults, Queue};
+use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::player_controller::player_controller::State as PlayState;
+use trop::audio::sleep_timer::SleepTimer;
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
@@ -104,6 +107,7 @@ pub enum Route {
     /// Saved songs and downloads in progress.
     Downloads,
     Settings,
+    Equalizer,
 }
 
 impl Route {
@@ -129,7 +133,12 @@ impl Route {
             Route::LikedSongs => Some("liked".to_owned()),
             Route::TopSongs => Some("top100".to_owned()),
             Route::Downloads => Some("downloads".to_owned()),
-            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => None,
+            Route::Home
+            | Route::Explore
+            | Route::Library
+            | Route::Search
+            | Route::Settings
+            | Route::Equalizer => None,
         }
     }
 }
@@ -299,6 +308,10 @@ struct App {
     liked: HashSet<String>,
     /// A short message above the player bar, with its id so a newer one is not cleared early.
     notice: Option<(u64, String)>,
+    /// Repeat, volume, equalizer and podcast speed, as saved.
+    defaults: PlayerDefaults,
+    speed: PlaybackSpeed,
+    sleep: SleepTimer,
 }
 
 pub enum Session {
@@ -428,6 +441,7 @@ pub enum Message {
     Volume(f64),
     /// The volume slider was let go, or repeat changed: remember them.
     SaveDefaults,
+    Equalizer(equalizer::Msg),
 }
 
 impl App {
@@ -485,13 +499,17 @@ impl App {
             window: dev_size().unwrap_or(WINDOW_SIZE),
             liked: HashSet::new(),
             notice: None,
+            defaults: PlayerDefaults::default_path()
+                .map(|path| PlayerDefaults::load(&path))
+                .unwrap_or_default(),
+            speed: PlaybackSpeed::default(),
+            sleep: SleepTimer::default(),
         };
-        let defaults = PlayerDefaults::default_path()
-            .map(|path| PlayerDefaults::load(&path))
-            .unwrap_or_default();
-        app.player.queue.is_repeat_on = defaults.repeat;
+        app.player.queue.is_repeat_on = app.defaults.repeat;
+        app.speed.podcast_rate = app.defaults.podcast_speed;
         if let Some(player) = &services.player {
-            player.set_volume(defaults.volume);
+            player.set_volume(app.defaults.volume);
+            player.set_equalizer(app.defaults.equalizer());
         }
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
@@ -550,7 +568,7 @@ impl App {
                     song: *song,
                     at: self.right_click,
                     queue_index,
-                    playlists: None,
+                    page: song_menu::Page::Actions,
                 });
                 Task::none()
             }
@@ -565,7 +583,7 @@ impl App {
                         song: song.clone(),
                         at,
                         queue_index: None,
-                        playlists: None,
+                        page: song_menu::Page::Actions,
                     });
                 }
                 Task::none()
@@ -577,9 +595,9 @@ impl App {
             Message::MenuAction(action) => self.menu_action(action),
             Message::MenuPlaylists(list) => {
                 if let Some(menu) = &mut self.menu
-                    && menu.playlists.is_some()
+                    && matches!(menu.page, song_menu::Page::Playlists(None))
                 {
-                    menu.playlists = Some(Some(list));
+                    menu.page = song_menu::Page::Playlists(Some(list));
                 }
                 Task::none()
             }
@@ -664,6 +682,15 @@ impl App {
                 Task::none()
             }
             Message::SaveDefaults => self.save_defaults(),
+            Message::Equalizer(msg) => {
+                if !equalizer::update(&mut self.defaults, msg) {
+                    return Task::none();
+                }
+                if let Some(player) = &self.services.player {
+                    player.set_equalizer(self.defaults.equalizer());
+                }
+                self.save_defaults()
+            }
             Message::Maximized(maximized) => {
                 self.maximized = maximized;
                 Task::none()
@@ -909,10 +936,17 @@ impl App {
                 self.player.error = match (result, &self.services.player) {
                     (Err(error), _) => Some(error),
                     (Ok(_), None) => Some("The audio player (libmpv) did not start.".to_owned()),
-                    (Ok(url), Some(player)) => player
-                        .play(&url, video_id.as_deref(), self.player.resume_at.take())
-                        .err()
-                        .map(|error| error.to_string()),
+                    (Ok(url), Some(player)) => {
+                        if let Some(song) = self.player.queue.song() {
+                            let is_episode = song.music_video_type.as_deref()
+                                == Some("MUSIC_VIDEO_TYPE_PODCAST_EPISODE");
+                            player.set_speed(self.speed.select(&song.video_id, is_episode));
+                        }
+                        player
+                            .play(&url, video_id.as_deref(), self.player.resume_at.take())
+                            .err()
+                            .map(|error| error.to_string())
+                    }
                 };
                 self.read_player();
                 // Dev aid: WOOF_MENU=1 opens the playing song's menu.
@@ -1041,6 +1075,11 @@ impl App {
                 let banked = self.plays.tick(now);
                 let saved = self.save_plays(banked);
                 dev_seek_end(&self.services, &self.player);
+                let slept = if self.sleep.due(now) {
+                    self.fall_asleep()
+                } else {
+                    Task::none()
+                };
                 let transition = self.tick_transitions();
                 // A song that played to its end: on to the next one. A song
                 // whose stream failed: retry it (Swift `recoverFromPlaybackFailure`).
@@ -1054,9 +1093,9 @@ impl App {
                     } else {
                         self.song_ended()
                     };
-                    Task::batch([saved, transition, after])
+                    Task::batch([saved, transition, after, slept])
                 } else {
-                    Task::batch([saved, transition])
+                    Task::batch([saved, transition, slept])
                 }
             }
             Message::Settings(message) => self.settings.update(message),
@@ -1112,6 +1151,7 @@ impl App {
             Route::Library => Task::none(),
             Route::Search => focus(pages::SEARCH_INPUT),
             Route::Settings => settings::load(),
+            Route::Equalizer => Task::none(),
             Route::Explore => {
                 if self.explore.is_some() {
                     return Task::none();
@@ -1174,6 +1214,11 @@ impl App {
     /// Swift `NowPlaying.stopped` at the end of a song: repeat it, play the
     /// next one, or continue with a radio of it (Autoplay Similar).
     fn song_ended(&mut self) -> Task<Message> {
+        if self.sleep.stops_at_song_end {
+            self.sleep.cancel();
+            let message = self.sleep.finish_message();
+            return self.notify(message);
+        }
         if self.player.queue.is_repeat_on {
             return self.start();
         }
@@ -1207,7 +1252,7 @@ impl App {
             }
             Action::Like(liked) => self.like(song, liked),
             Action::AddToPlaylist => {
-                menu.playlists = Some(None);
+                menu.page = song_menu::Page::Playlists(None);
                 self.menu = Some(menu);
                 Task::perform(self.services.clone().playlists(), Message::MenuPlaylists)
             }
@@ -1232,6 +1277,34 @@ impl App {
             Action::RemoveFromQueue(index) => {
                 self.player.queue.remove(index);
                 Task::none()
+            }
+            Action::Open(page) => {
+                menu.page = page;
+                self.menu = Some(menu);
+                Task::none()
+            }
+            Action::Sleep(Some(minutes)) => {
+                self.sleep.start(minutes, Instant::now());
+                let summary = self.sleep.summary(Instant::now()).unwrap_or_default();
+                self.notify(&format!("Sleep timer: {summary}"))
+            }
+            Action::Sleep(None) => {
+                self.sleep.cancel();
+                self.notify("Sleep timer off")
+            }
+            Action::SleepAtSongEnd => {
+                self.sleep.stop_at_song_end();
+                self.notify("Pausing at the end of this song")
+            }
+            Action::Speed(rate) => {
+                // A mix sets the speed itself: end it first, like a seek (Swift `setSpeed`).
+                let finished = self.finish_transition();
+                if let Some(rate) = self.speed.set(rate)
+                    && let Some(player) = &self.services.player
+                {
+                    player.set_speed(rate);
+                }
+                Task::batch([finished, self.save_defaults()])
             }
         }
     }
@@ -1313,15 +1386,24 @@ impl App {
             .map(move |_| Message::ClearNotice(id))
     }
 
-    fn save_defaults(&self) -> Task<Message> {
-        let defaults = PlayerDefaults {
-            repeat: self.player.queue.is_repeat_on,
-            volume: self
-                .services
-                .player
-                .as_ref()
-                .map_or(1.0, |player| player.volume()),
-        };
+    /// Swift `SleepTimer.fire`: pause, and say good night.
+    fn fall_asleep(&mut self) -> Task<Message> {
+        let finished = self.finish_transition();
+        if let Some(player) = &self.services.player {
+            player.set_paused(true);
+        }
+        self.read_player();
+        let message = self.sleep.finish_message();
+        Task::batch([finished, self.notify(message)])
+    }
+
+    fn save_defaults(&mut self) -> Task<Message> {
+        self.defaults.repeat = self.player.queue.is_repeat_on;
+        self.defaults.podcast_speed = self.speed.podcast_rate;
+        if let Some(player) = &self.services.player {
+            self.defaults.volume = player.volume();
+        }
+        let defaults = self.defaults.clone();
         Task::future(async move {
             let Some(path) = PlayerDefaults::default_path() else {
                 return;
@@ -1434,7 +1516,8 @@ impl App {
             is_playing: player.state == PlayState::Playing,
             current_time: player.position,
             duration: player.duration,
-            ..NowPlayingState::default()
+            is_repeat_on: player.queue.is_repeat_on,
+            stops_at_song_end: self.sleep.stops_at_song_end,
         };
         let task = transitions.tick(&np, &self.services);
         Task::batch([task, self.advance_if_promoted()])
@@ -1592,9 +1675,18 @@ impl App {
             layers = layers.push(notice_view(notice));
         }
         if let Some(menu) = &self.menu {
-            let liked = self.liked.contains(&menu.song.video_id);
-            let account = matches!(self.session, Session::SignedIn(_));
-            layers = layers.push(song_menu::view(menu, liked, account, self.window));
+            let context = song_menu::Context {
+                liked: self.liked.contains(&menu.song.video_id),
+                account: matches!(self.session, Session::SignedIn(_)),
+                playing: self
+                    .player
+                    .song()
+                    .is_some_and(|song| song.video_id == menu.song.video_id),
+                sleep: &self.sleep,
+                speed: self.speed.rate,
+                window: self.window,
+            };
+            layers = layers.push(song_menu::view(menu, context));
         }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
@@ -1625,6 +1717,7 @@ impl App {
             Route::Settings => self
                 .settings
                 .view(self.transitions.as_ref().map(|t| &t.settings)),
+            Route::Equalizer => equalizer::view(&self.defaults),
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
@@ -2000,6 +2093,7 @@ fn dev_route() -> Option<Route> {
             "explore" => Some(Route::Explore),
             "search" => Some(Route::Search),
             "settings" => Some(Route::Settings),
+            "equalizer" => Some(Route::Equalizer),
             _ => None,
         },
     }

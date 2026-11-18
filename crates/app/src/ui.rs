@@ -107,6 +107,7 @@ pub fn episode_song(episode: &EpisodeItem) -> SongItem {
         artists: episode.artists.clone(),
         duration: episode.duration,
         thumbnail_url: episode.thumbnail_url.clone(),
+        music_video_type: Some("MUSIC_VIDEO_TYPE_PODCAST_EPISODE".into()),
         ..SongItem::default()
     }
 }

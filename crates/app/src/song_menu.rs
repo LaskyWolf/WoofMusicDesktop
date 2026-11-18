@@ -1,6 +1,9 @@
 //! The song menu (Swift `SongActionsMenu`): right-click a song, or the
 //! player bar's More button, to get Play Next, Add to Queue, Like, Add to
-//! Playlist, Start Radio, Go To and Share.
+//! Playlist, Start Radio, Go To and Share. The playing song's menu also
+//! has the Sleep Timer and Playback Speed.
+
+use std::time::Instant;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Tree, Widget};
@@ -10,6 +13,8 @@ use iced::widget::{Space, button, column, container, mouse_area, row, scrollable
 use iced::{
     Alignment, Background, Border, Element, Event, Length, Padding, Point, Rectangle, Size, Vector,
 };
+use trop::audio::playback_speed::PlaybackSpeed;
+use trop::audio::sleep_timer::{self, SleepTimer};
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::networking::models::yt_item::SongItem;
 
@@ -28,8 +33,29 @@ pub struct Menu {
     pub at: Point,
     /// The song's place in the queue, when the menu came from the queue panel.
     pub queue_index: Option<usize>,
-    /// `Some` once Add to Playlist was picked: the playlists, `None` while they load.
-    pub playlists: Option<Option<Vec<PlaylistEntity>>>,
+    pub page: Page,
+}
+
+/// What the menu panel lists.
+#[derive(Clone, Debug)]
+pub enum Page {
+    Actions,
+    /// After Add to Playlist: the playlists, `None` while they load.
+    Playlists(Option<Vec<PlaylistEntity>>),
+    Sleep,
+    Speed,
+}
+
+/// What the menu needs from the app to label its items.
+pub struct Context<'a> {
+    pub liked: bool,
+    /// Like and Add to Playlist need an account.
+    pub account: bool,
+    /// The menu's song is the one playing: Sleep Timer and Speed apply to it.
+    pub playing: bool,
+    pub sleep: &'a SleepTimer,
+    pub speed: f64,
+    pub window: Size,
 }
 
 #[derive(Clone, Debug)]
@@ -44,16 +70,35 @@ pub enum Action {
     CopyLink,
     Download,
     RemoveFromQueue(usize),
+    Open(Page),
+    /// Starts a countdown of this many minutes, or turns the timer off.
+    Sleep(Option<u64>),
+    SleepAtSongEnd,
+    Speed(f64),
 }
 
+/// The speeds the menu offers (`PlaybackSpeed.presets` plus both ends).
+const SPEEDS: [f64; 8] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0];
+
 /// The menu over the whole window: a click outside closes it.
-/// `account` is false for a guest: Like and Add to Playlist need an account.
-pub fn view<'a>(menu: &'a Menu, liked: bool, account: bool, window: Size) -> Element<'a, Message> {
-    let items: Vec<Element<'a, Message>> = match &menu.playlists {
-        None => actions(menu, liked, account),
-        Some(None) => vec![note("Loading playlists…")],
-        Some(Some(list)) if list.is_empty() => vec![note("No playlists yet")],
-        Some(Some(list)) => list
+pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
+    let window = context.window;
+    let items: Vec<Element<'a, Message>> = match &menu.page {
+        Page::Actions => actions(menu, &context),
+        Page::Sleep => sleep_items(context.sleep),
+        Page::Speed => SPEEDS
+            .iter()
+            .map(|&rate| {
+                checked(
+                    &PlaybackSpeed::label(rate),
+                    Action::Speed(rate),
+                    (context.speed - rate).abs() < 0.001,
+                )
+            })
+            .collect(),
+        Page::Playlists(None) => vec![note("Loading playlists…")],
+        Page::Playlists(Some(list)) if list.is_empty() => vec![note("No playlists yet")],
+        Page::Playlists(Some(list)) => list
             .iter()
             .map(|playlist| {
                 item(
@@ -101,14 +146,14 @@ pub fn view<'a>(menu: &'a Menu, liked: bool, account: bool, window: Size) -> Ele
     .into()
 }
 
-fn actions(menu: &Menu, liked: bool, account: bool) -> Vec<Element<'_, Message>> {
+fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> {
     let song = &menu.song;
     let mut items = vec![
         item(icons::PLAY_NEXT, "Play Next", Action::PlayNext),
         item(icons::ADD_QUEUE, "Add to Queue", Action::AddToQueue),
     ];
-    if account {
-        items.push(if liked {
+    if context.account {
+        items.push(if context.liked {
             item(icons::HEART_FILL, "Unlike", Action::Like(false))
         } else {
             item(icons::HEART, "Like", Action::Like(true))
@@ -143,7 +188,74 @@ fn actions(menu: &Menu, liked: bool, account: bool) -> Vec<Element<'_, Message>>
             Action::RemoveFromQueue(index),
         ));
     }
+    if context.playing {
+        let sleep = match context.sleep.summary(Instant::now()) {
+            Some(summary) => format!("Sleep Timer · {summary}"),
+            None => "Sleep Timer…".to_owned(),
+        };
+        items.push(item(icons::MOON, &sleep, Action::Open(Page::Sleep)));
+        let speed = format!("Speed · {}", PlaybackSpeed::label(context.speed));
+        items.push(item(icons::SPEED, &speed, Action::Open(Page::Speed)));
+    }
     items
+}
+
+/// Swift `SleepTimerSheet`: End of Song, the countdowns, and Off while one runs.
+fn sleep_items<'a>(timer: &SleepTimer) -> Vec<Element<'a, Message>> {
+    let mut items = vec![checked(
+        "End of Song",
+        Action::SleepAtSongEnd,
+        timer.stops_at_song_end,
+    )];
+    items.extend(sleep_timer::PRESETS.iter().map(|&minutes| {
+        let label = match minutes {
+            60 => "1 hour".to_owned(),
+            90 => "1 hour 30 min".to_owned(),
+            m => format!("{m} minutes"),
+        };
+        checked(
+            &label,
+            Action::Sleep(Some(minutes)),
+            timer.minutes == Some(minutes),
+        )
+    }));
+    if timer.is_active() {
+        items.push(item(icons::REMOVE, "Turn Off Timer", Action::Sleep(None)));
+    }
+    items
+}
+
+/// A choice with a check mark when it is the current one.
+fn checked<'a>(label: &str, action: Action, on: bool) -> Element<'a, Message> {
+    let mark: Element<'a, Message> = if on {
+        ui::icon(icons::CHECK, 18.0)
+            .style(|_, _| svg::Style {
+                color: Some(theme::ACCENT),
+            })
+            .into()
+    } else {
+        Space::new().width(18).into()
+    };
+    let content = row![
+        text(label.to_owned())
+            .size(14)
+            .font(theme::weight(Weight::Medium))
+            .width(Length::Fill),
+        mark,
+    ]
+    .align_y(Alignment::Center);
+    button(container(content).center_y(ITEM).padding([0, 10]))
+        .width(Length::Fill)
+        .padding(0)
+        .on_press(Message::MenuAction(action))
+        .style(|_, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then_some(Background::Color(theme::PRESSED)),
+            border: Border::default().rounded(8),
+            text_color: theme::TEXT,
+            ..button::Style::default()
+        })
+        .into()
 }
 
 fn item<'a>(icon: &'static [u8], label: &str, action: Action) -> Element<'a, Message> {
@@ -326,6 +438,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
 
 /// Outline icons in the app's 2 px stroke; `ui::icon` tints them.
 pub mod icons {
+    pub const CHECK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+    pub const MOON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>"##;
+    pub const SPEED: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-4"/></g></svg>"##;
     pub const PLAY_NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M4 11h10M4 16h6"/><path d="M15 14l4 3-4 3z" fill="#fff"/></g></svg>"##;
     pub const ADD_QUEUE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h12M4 11h12M4 16h7M17 14v6M14 17h6"/></g></svg>"##;
     pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 19.5s-7-4.3-8.6-8.5C2.2 7.9 4.1 5 7.2 5c2 0 3.4 1 4.8 2.8C13.4 6 14.8 5 16.8 5c3.1 0 5 2.9 3.8 6-1.6 4.2-8.6 8.5-8.6 8.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>"##;

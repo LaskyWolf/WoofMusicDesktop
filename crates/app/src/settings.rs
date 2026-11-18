@@ -349,6 +349,14 @@ fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
     };
     let mut rows = vec![
         setting(
+            "Equalizer",
+            caption("Adjust the sound with presets or a custom curve."),
+            Some(ui::pill_button(
+                "Open",
+                crate::Message::Navigate(crate::Route::Equalizer),
+            )),
+        ),
+        setting(
             "AutoMix",
             caption(
                 "Blends songs like a DJ: matches their tempo, keeps the beats together and \
@@ -398,7 +406,7 @@ fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
 }
 
 /// Rows on one rounded surface, a hairline between each.
-fn group(rows: Vec<Element<'_, crate::Message>>) -> Element<'_, crate::Message> {
+pub(crate) fn group(rows: Vec<Element<'_, crate::Message>>) -> Element<'_, crate::Message> {
     let mut list = column![];
     for (i, row) in rows.into_iter().enumerate() {
         if i > 0 {
@@ -426,7 +434,7 @@ fn divider<'a>() -> Element<'a, crate::Message> {
 }
 
 /// A setting: its name and details on the left, its control on the right.
-fn setting<'a>(
+pub(crate) fn setting<'a>(
     title: &'a str,
     detail: Element<'a, crate::Message>,
     control: Option<Element<'a, crate::Message>>,
@@ -446,7 +454,7 @@ fn setting<'a>(
     .into()
 }
 
-fn caption<'a>(line: impl text::IntoFragment<'a>) -> Element<'a, crate::Message> {
+pub(crate) fn caption<'a>(line: impl text::IntoFragment<'a>) -> Element<'a, crate::Message> {
     text(line).size(13).color(theme::SECONDARY).into()
 }
 
@@ -460,7 +468,7 @@ fn switch<'a>(on: bool, action: fn(bool) -> Action) -> Element<'a, crate::Messag
     })
 }
 
-fn toggle<'a>(
+pub(crate) fn toggle<'a>(
     on: bool,
     message: impl Fn(bool) -> crate::Message + 'a,
 ) -> Element<'a, crate::Message> {

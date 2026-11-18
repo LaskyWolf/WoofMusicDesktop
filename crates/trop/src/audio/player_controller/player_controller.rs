@@ -43,6 +43,10 @@ struct Shared {
     failed: bool,
     /// The volume slider, 0...1; mpv's volume is `100 × volume`.
     volume: f64,
+    /// The equalizer's gains, `None` while it is off.
+    equalizer: Option<Vec<f64>>,
+    /// The speed songs load at (Swift `PlaybackSpeed.rate`).
+    speed: f64,
     /// While true, the outgoing song's end finishes the crossfade instead of
     /// stopping playback.
     is_crossfading: bool,
@@ -135,6 +139,8 @@ impl PlayerController {
             desired_playing: false,
             failed: false,
             volume: 1.0,
+            equalizer: None,
+            speed: 1.0,
             is_crossfading: false,
             events: DeckEvents::default(),
             has_bass_filter: true,
@@ -205,7 +211,7 @@ impl PlayerController {
         mpv.set_property("pause", !desired_playing)?;
         // A cancelled crossfade can leave the deck faded or sped up.
         mpv.set_property("volume", 100.0 * self.volume())?;
-        mpv.set_property("speed", 1.0)?;
+        mpv.set_property("speed", self.speed())?;
         mpv.set_property("start", start.map_or("none".to_string(), fmt))?;
         self.apply_filters(&deck, None, None);
         if let Err(error) = mpv.command("loadfile", &[url, "replace"]) {
@@ -340,6 +346,30 @@ impl PlayerController {
         }
     }
 
+    pub fn speed(&self) -> f64 {
+        lock(&self.shared).speed
+    }
+
+    /// The speed of the playing song and the next ones loaded (Swift
+    /// `setSpeed`; mpv keeps the pitch). The app ends a running mix first.
+    pub fn set_speed(&self, rate: f64) {
+        lock(&self.shared).speed = rate;
+        let _ = self.active_deck().set("speed", &fmt(rate));
+    }
+
+    /// Turns the equalizer on with `gains`, or off with `None`. The playing
+    /// song gets it now unless a mix runs; the next song loads with it.
+    pub fn set_equalizer(&self, gains: Option<Vec<f64>>) {
+        let crossfading = {
+            let mut shared = lock(&self.shared);
+            shared.equalizer = gains;
+            shared.is_crossfading
+        };
+        if !crossfading {
+            self.apply_filters(&self.active_deck(), None, None);
+        }
+    }
+
     pub fn take_failed(&self) -> bool {
         std::mem::take(&mut lock(&self.shared).failed)
     }
@@ -362,9 +392,13 @@ impl PlayerController {
     /// set again without the AutoMix effects, then without the bass filter,
     /// and mixes skip what is missing.
     pub fn apply_filters(&self, deck: &MpvDeck, bass_gain: Option<f64>, echo_delay: Option<f64>) {
-        let (has_bass, has_effects) = {
+        let (has_bass, has_effects, equalizer) = {
             let shared = lock(&self.shared);
-            (shared.has_bass_filter, shared.has_effect_filters)
+            (
+                shared.has_bass_filter,
+                shared.has_effect_filters,
+                shared.equalizer.clone(),
+            )
         };
         let tiers = [(true, true), (false, true), (true, false), (false, false)]
             .into_iter()
@@ -372,7 +406,7 @@ impl PlayerController {
         let mut accepted = (false, false);
         let mut failure = None;
         for (bass, effects) in tiers {
-            let chain = filter_chain(bass_gain, echo_delay, bass, effects);
+            let chain = filter_chain(bass_gain, echo_delay, bass, effects, equalizer.as_deref());
             match deck.set("af", &chain) {
                 Ok(()) => {
                     accepted = (bass, effects);
@@ -563,6 +597,7 @@ pub fn filter_chain(
     echo_delay: Option<f64>,
     includes_bass: bool,
     includes_effects: bool,
+    equalizer: Option<&[f64]>,
 ) -> String {
     let mut filters = Vec::new();
     if includes_bass {
@@ -578,6 +613,9 @@ pub fn filter_chain(
             "@{EFFECTS_LABEL}:lavfi=graph=%{}%{graph}",
             graph.len()
         ));
+    }
+    if let Some(eq) = equalizer.and_then(crate::audio::equalizer::filter) {
+        filters.push(eq);
     }
     filters.join(",")
 }
