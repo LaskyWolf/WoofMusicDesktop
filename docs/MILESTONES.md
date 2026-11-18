@@ -68,9 +68,23 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Downloads for offline play
 - [x] Media keys and system media panel: MPRIS on Linux, SMTC on Windows (`playwire`)
 - [x] Discord presence (local IPC), Last.fm and ListenBrainz scrobbling, Odesli song links; Settings page
-- [ ] ListenTogether, Recap
+- [ ] Everyday controls: volume (`PlayerVolumeSlider`), shuffle and repeat (`PlaybackQueue`), like button (`LikeStore`, `LikeFlavor`)
+- [ ] Song menu: play next, add to queue, add to playlist, go to album or artist, share, start radio (`SongActionsMenu`, `RadioOptions`)
+- [ ] Queue editing: reorder, remove (`QueueView`)
+- [ ] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
+- [ ] History page and play reports to YouTube Music history (`History/`, `YouTubeHistoryReport`)
+- [ ] Activity: new releases from followed artists (`Activity/`)
+- [ ] Sleep timer, playback speed, equalizer (`SleepTimer`, `PlaybackSpeed`, `Equalizer`)
+- [ ] SponsorBlock, comments panel (`SponsorBlock`, `Comments/`)
+- [ ] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
+- [ ] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
+- [ ] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
+- [ ] Profile and Recap (`Profile/`)
+- [ ] ListenTogether (`ListenTogether/`)
 
-Done when: every WoofMusic iOS feature in `PRODUCT.md` works on desktop.
+Not ported (iPhone only): CarPlay, widgets, App Intents and quick actions, haptics, swipe gestures, alternate app icons, in-app updater.
+
+Done when: every WoofMusic iOS feature above works on desktop.
 
 ## R7: Window background
 
