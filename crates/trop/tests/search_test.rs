@@ -58,6 +58,23 @@ fn top_result_is_the_daft_punk_artist_with_its_audience_line() {
 }
 
 #[test]
+fn top_result_song_reads_artists_and_duration_from_the_card_subtitle() {
+    let sections = SearchParser::parse_search_results(&fixture("search_top_result_song"));
+    let YTItem::Song(song) = &sections[0].items[0] else {
+        panic!("top result is not a song: {:?}", sections[0].items[0]);
+    };
+    assert_eq!(song.video_id, "5NV6Rdv1a3I");
+    assert_eq!(song.artists.len(), 1);
+    assert_eq!(song.artists[0].name, "Daft Punk");
+    assert_eq!(
+        song.artists[0].id.as_deref(),
+        Some("UCRr1xG_2WIDs18a6cIiCxeA")
+    );
+    assert_eq!(song.duration, 249);
+    assert_eq!(song.album, None);
+}
+
+#[test]
 fn songs_albums_artists_playlists_and_podcasts_are_detected() {
     let sections = sections();
     let songs = &named(&sections, "Songs").items;

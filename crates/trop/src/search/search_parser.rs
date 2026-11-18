@@ -1,4 +1,5 @@
 use serde_json::Value;
+use swiftytube::formatting::duration_format::DurationFormat;
 use swiftytube::networking::inner_tube_decode::{
     InnerTubeDecode, JsonDict, as_dict, as_dict_list, as_string,
 };
@@ -190,12 +191,17 @@ impl SearchParser {
 
         let watch = nav.and_then(|n| as_dict(n.get("watchEndpoint")));
         if let Some(video_id) = as_string(watch.and_then(|w| w.get("videoId"))) {
+            // Subtitle runs: "Song"/"Video" • artists • album • stats • duration.
+            let song = SongItem::from_two_row_item(
+                card_shelf,
+                video_id.to_string(),
+                DurationFormat::parse_renderer_duration(card_shelf),
+                as_string(watch.and_then(|w| w.get("playlistId"))).map(str::to_string),
+            );
             return Some(YTItem::Song(SongItem {
-                video_id: video_id.to_string(),
                 title,
                 thumbnail_url,
-                playlist_id: as_string(watch.and_then(|w| w.get("playlistId"))).map(str::to_string),
-                ..SongItem::default()
+                ..song
             }));
         }
 
