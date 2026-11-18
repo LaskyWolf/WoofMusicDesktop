@@ -103,3 +103,20 @@ fn parse_suggestions_reads_the_text_suggestions() {
     assert!(suggestions.iter().all(|s| s.starts_with("daft p")));
     assert!(SearchService::parse_suggestions(b"not json").is_empty());
 }
+
+#[test]
+fn top_result_playlist_id_loses_only_the_vl_prefix() {
+    let response = serde_json::json!({ "contents": { "sectionListRenderer": { "contents": [
+        { "musicCardShelfRenderer": {
+            "title": { "runs": [{ "text": "Mix" }] },
+            "onTap": { "browseEndpoint": {
+                "browseId": "VLPLabcVLdef",
+                "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_PLAYLIST" }
+                }
+            }}
+        }}
+    ]}}});
+    let sections = SearchParser::parse_search_results(response.as_object().unwrap());
+    assert_eq!(sections[0].items[0].id(), "PLabcVLdef");
+}
