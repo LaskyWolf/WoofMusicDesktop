@@ -37,12 +37,23 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `SyncBridge.running` (`Task` shared by callers) | a `tokio::sync::Mutex<()>`: a caller that finds it held waits for that sync and does not start another |
 | `SettingsStore` sync flags | `SyncBridge::options()`: every section on, the Swift defaults |
 | `Notification.Name.libraryDidChange` | not ported yet (no screen listens) |
+| `Crossfade` singleton driving mpv with `Task`s and timers | `crossfade::Crossfade` state machine: `tick` returns an `Action`, the player owns decks, timers and tasks and reports back (`plan_ready`, `deck_loaded`, `outgoing_ended`, ...) |
+| `planToken: UUID` | `u64` token in `Action::Plan`, bumped by every `reset` |
+| `runFade` / `runBeatMix` / `applyStyle` loops | `fade_gains` and `BeatMix::step`, one call per 50 ms step; they return gains and changed `af-command` values (`Effect`) |
+| `SettingsStore` crossfade/AutoMix fields | `TransitionSettings` with the Swift defaults (both off, 6 s, effects 1.0) |
+| `FFmpegKit` decode in `Crossfade.decode` | `crossfade::ffmpeg_args` for an `ffmpeg` process, bytes through `samples_from_f32le` into `track_analyzer::analyze` |
+| `TrackAnalyzer.Result` | `TrackAnalysis` (`Result` would shadow Rust's) |
+| `Crossfade.history` (Diagnostics) and the plan summary line | not ported (no Diagnostics screen); `plan_ready` logs a short summary |
 
 ## Status
 
-Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`).
+Translated: `Networking/Models/` (`YTItem`, `HomePage`, `HomePageParser`), `Home/HomeViewModel` (data half), `Search/` (`SearchParser`, `SearchService` network half), `Explore/` (`ExploreViewModel` data half, `MoodCard` families), `Detail/` (`DetailModels`, album, artist, playlist and podcast parsers), `Utilities/UIImage+ColorExtraction`, `Database/` (migrations v1–v11, `DatabaseService`, entities), `Services/` (`TropLibraryStore`, `LibraryPages`, `SyncBridge`), `Audio/` (`TrackAnalyzer`, `MixPlanner`, the decision logic of `Crossfade`; the player wiring waits for R6).
 
 Not yet: personalization sections on Home, `SearchService.localSearch`, `MoodGenreIndex`, `PlaylistHeaderCache`, saving and downloads from detail pages (all R5), GRDB `ValueObservation` live queries and their publishers, the other `Services/` files, `SyncBridge.cancelRunning` and its `AccountState.isChangingSession` guard (no profile switching yet), `LikeStore` refresh after a sync.
+
+## Wiring crossfade and AutoMix
+
+The player needs a spare `MpvDeck` and `filterChain` (R6) first. Then: call `Crossfade::tick` every 0.25 s with a `NowPlayingState` and the live `TransitionSettings`, and act on the `Action`. `Plan`: resolve the next song's URL and loudness, run `ffmpeg` with `ffmpeg_args` for `TAIL_SECONDS` from the end of the playing file and `HEAD_SECONDS` from the start of the next one, `analyze` both, then call `plan_ready` (or `plan_failed`). `LoadIncoming`: set `incoming_properties` and the `af` chain (`plan.incoming_bass_gain()`, `plan.echo_delay`) on the spare deck, `loadfile`, then `deck_loaded`/`deck_failed` from its events. `StartMix`: sleep `wait`, `begin`, unpause the spare deck, then every 50 ms either `fade_gains(fade_progress(..))` or `BeatMix::step`, send volumes through `mpv_volume` and effects with `af-command`, call `promote` at progress 0.5 (then `promoteSpare` and advance NowPlaying), and on done send `tail_cut_effects` and wait `BeatMix::tail` before `complete`. A new song or stop calls `reset`; pause, seek and speed changes call `finish_now`; the outgoing deck's EOF during a mix calls `outgoing_ended`. The analysis needs only mono 32-bit float samples at 11 025 Hz; no Apple framework or network service is involved.
 
 ## Tests
 
