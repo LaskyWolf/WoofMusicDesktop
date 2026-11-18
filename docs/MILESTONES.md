@@ -66,7 +66,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [ ] Two-deck player: Crossfade and AutoMix
 - [ ] Lyrics (LRCLIB, Musixmatch and the other Trop providers), romanization
 - [ ] Downloads for offline play
-- [ ] Media keys and system media panel: MPRIS on Linux, SMTC on Windows (`souvlaki`)
+- [x] Media keys and system media panel: MPRIS on Linux, SMTC on Windows (`playwire`)
 - [ ] Discord presence, Last.fm, ListenBrainz, ListenTogether, Odesli, Recap
 
 Done when: every WoofMusic iOS feature in `PRODUCT.md` works on desktop.

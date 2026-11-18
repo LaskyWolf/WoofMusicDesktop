@@ -2,6 +2,7 @@
 
 mod glass;
 mod login;
+mod media_controls;
 mod now_playing;
 mod pages;
 mod services;
@@ -425,6 +426,7 @@ impl App {
                 search,
                 scroll,
                 snapshot_task(),
+                media_controls::attach(),
             ]),
         )
     }
@@ -922,12 +924,14 @@ impl App {
             self.player.position = player.current_time();
             self.player.duration = player.duration();
         }
+        media_controls::publish(&self.player);
     }
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
             window::resize_events().map(|_| Message::Resized),
             keyboard::listen().filter_map(shortcut),
+            media_controls::events(),
         ];
         if self.player.song().is_some() {
             subscriptions
