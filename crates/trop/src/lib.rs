@@ -15,4 +15,5 @@ pub mod odesli;
 pub mod playback;
 pub mod search;
 pub mod services;
+pub mod settings;
 pub mod utilities;

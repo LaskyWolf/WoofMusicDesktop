@@ -16,8 +16,8 @@ use super::providers::musixmatch_provider::MusixmatchProvider;
 use super::providers::netease_provider::NeteaseProvider;
 use crate::networking::models::home_page::next_id;
 
-/// Swift `LyricsSettings` plus `SettingsStore.disabledLyricsProviders`.
-// ponytail: not persisted; the desktop app has no lyrics settings screen yet.
+/// Swift `LyricsSettings` plus `SettingsStore.disabledLyricsProviders`;
+/// saved by `settings::settings_store::SettingsStore`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LyricsSettings {
     /// Ordered provider ids.

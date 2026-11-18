@@ -6,13 +6,15 @@ use std::sync::Arc;
 use iced::font::Weight;
 use iced::gradient::Linear;
 use iced::widget::{
-    Column, Space, button, column, container, image, responsive, row, scrollable, text,
+    Column, Space, button, column, container, image, progress_bar, responsive, rich_text, row,
+    scrollable, text,
 };
 use iced::{
     Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Radians, Shadow,
     Vector,
 };
 use trop::networking::models::yt_item::SongItem;
+use trop::settings::settings_store::{LyricsAlignment, PlayerBackgroundStyle, SettingsStore};
 use trop::utilities::ui_image_color_extraction::{FALLBACK_COLORS, Rgb, darkened};
 
 use crate::services::{Artwork, Lyrics};
@@ -36,10 +38,24 @@ const LINES_BELOW: u16 = 3;
 
 /// Swift `FullPlayerView` background: the cover's two colours, darkened until
 /// white text reads on them, top to bottom, with a glow of the first one at
-/// the top. `None` while the artwork loads: Swift's fallback pair.
-pub fn background<'a>(artwork: Option<&Artwork>) -> Element<'a, Message> {
+/// the top. `None` while the artwork loads: Swift's fallback pair. `Solid`
+/// fills with the first colour alone.
+pub fn background<'a>(
+    artwork: Option<&Artwork>,
+    style: PlayerBackgroundStyle,
+) -> Element<'a, Message> {
     let [top, bottom] = artwork.map_or(FALLBACK_COLORS, |artwork| artwork.colors);
     let (top, bottom) = (readable(top), readable(bottom));
+    if style == PlayerBackgroundStyle::Solid {
+        return container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(top)),
+                ..container::Style::default()
+            })
+            .into();
+    }
     let base = Linear::new(Radians(PI))
         .add_stop(0.0, top)
         .add_stop(1.0, bottom);
@@ -65,28 +81,38 @@ fn readable(color: Rgb) -> Color {
     Color::from_rgb(r as f32, g as f32, b as f32)
 }
 
+/// What the lyrics column shows.
+#[derive(Clone, Copy)]
+pub struct LyricsPane<'a> {
+    pub lyrics: &'a Load<Arc<Lyrics>>,
+    /// The playback position, before the lyrics offset.
+    pub time: f64,
+    pub prefs: &'a SettingsStore,
+    pub extras: &'a crate::lyrics::State,
+    pub video_id: &'a str,
+}
+
 /// The cover as large as the content area allows, title and links under it;
-/// with `lyrics` (and the playback time), the cover moves left and the lyrics
-/// fill the right.
+/// with `lyrics`, the cover moves left and the lyrics fill the right.
 pub fn view<'a>(
     covers: &'a Covers,
     artwork: Option<&'a Artwork>,
     song: &'a SongItem,
     queue_open: bool,
-    lyrics: Option<(&'a Load<Arc<Lyrics>>, f64)>,
+    lyrics: Option<LyricsPane<'a>>,
 ) -> Element<'a, Message> {
     let content = responsive(move |size| match lyrics {
         None => container(stage(covers, artwork, song, size.width, size.height))
             .center(Length::Fill)
             .into(),
-        Some((lyrics, time)) if size.width < SPLIT_MIN => lyric_lines(lyrics, time),
-        Some((lyrics, time)) => {
+        Some(pane) if size.width < SPLIT_MIN => lyric_lines(pane),
+        Some(pane) => {
             let width = (size.width - SPLIT_GAP) * 0.42;
             row![
                 container(stage(covers, artwork, song, width, size.height))
                     .width(width)
                     .center_y(Length::Fill),
-                container(lyric_lines(lyrics, time)).width(Length::Fill),
+                container(lyric_lines(pane)).width(Length::Fill),
             ]
             .spacing(SPLIT_GAP)
             .into()
@@ -157,10 +183,21 @@ fn stage<'a>(
         .into()
 }
 
-/// Swift `LyricsView` on the player's colours: synced lines keep the current
-/// one two fifths down, the others fading with their distance from it.
-fn lyric_lines(lyrics: &Load<Arc<Lyrics>>, time: f64) -> Element<'_, Message> {
-    let lyrics = match lyrics {
+/// Swift `LyricsView` on the player's colours, under the "⋯" options:
+/// synced lines keep the current one two fifths down, the others fading
+/// with their distance from it.
+fn lyric_lines(pane: LyricsPane<'_>) -> Element<'_, Message> {
+    let loaded = match pane.lyrics {
+        Load::Loaded(lyrics) => Some(&**lyrics),
+        _ => None,
+    };
+    pane.extras
+        .around(lines_of(pane), loaded, pane.video_id, pane.prefs)
+}
+
+fn lines_of(pane: LyricsPane<'_>) -> Element<'_, Message> {
+    let time = pane.time + pane.prefs.lyrics_offset_seconds;
+    let lyrics = match pane.lyrics {
         Load::Loading => return note(note_text("Looking for lyrics…")),
         Load::Failed(_) => {
             return note(
@@ -186,8 +223,15 @@ fn lyric_lines(lyrics: &Load<Arc<Lyrics>>, time: f64) -> Element<'_, Message> {
         .padding([8, 12])
     });
     let hidden = scrollable::Direction::Vertical(scrollable::Scrollbar::hidden());
+    let style = LineStyle {
+        alignment: pane.prefs.lyrics_alignment,
+        romanize: pane.prefs.romanize_current_track,
+        karaoke: pane.extras.karaoke,
+        intervals: pane.prefs.show_interval_indicator,
+        time,
+    };
     let lines = |range: std::ops::Range<usize>, distance: &dyn Fn(usize) -> usize| {
-        Column::with_children(range.map(|index| lyric_line(lyrics, index, distance(index))))
+        Column::with_children(range.map(|index| lyric_line(lyrics, index, distance(index), style)))
     };
     if !lyrics.synced() {
         // Plain text: every line readable, scrolled by hand.
@@ -211,7 +255,7 @@ fn lyric_lines(lyrics: &Load<Arc<Lyrics>>, time: f64) -> Element<'_, Message> {
         .anchor_bottom()
         .height(Length::Shrink);
     let now: Element<'_, Message> = match current {
-        Some(current) => lyric_line(lyrics, current, 0),
+        Some(current) => lyric_line(lyrics, current, 0, style),
         None => Space::new().into(),
     };
     column![
@@ -226,9 +270,27 @@ fn lyric_lines(lyrics: &Load<Arc<Lyrics>>, time: f64) -> Element<'_, Message> {
     .into()
 }
 
+/// The settings a lyric line is drawn with.
+#[derive(Clone, Copy)]
+struct LineStyle {
+    alignment: LyricsAlignment,
+    romanize: bool,
+    karaoke: bool,
+    intervals: bool,
+    /// Playback position plus the lyrics offset.
+    time: f64,
+}
+
 /// One line, white at `distance` 0 and fading further away (Swift
 /// `opacityForDistance` / `scaleForDistance`); a timed one seeks there on click.
-fn lyric_line(lyrics: &Lyrics, index: usize, distance: usize) -> Element<'_, Message> {
+/// In karaoke the current line lights its words as they are sung, and an
+/// instrumental break after a line shows how long it has left.
+fn lyric_line(
+    lyrics: &Lyrics,
+    index: usize,
+    distance: usize,
+    style: LineStyle,
+) -> Element<'_, Message> {
     let (alpha, size) = match distance {
         0 => (1.0, 34.0),
         1 => (0.7, 33.0),
@@ -236,20 +298,76 @@ fn lyric_line(lyrics: &Lyrics, index: usize, distance: usize) -> Element<'_, Mes
         _ => (0.4, 32.0),
     };
     let white = |a: f32| Color { a, ..Color::WHITE };
+    let align = match style.alignment {
+        LyricsAlignment::Left => Alignment::Start,
+        LyricsAlignment::Center => Alignment::Center,
+        LyricsAlignment::Right => Alignment::End,
+    };
     let line = &lyrics.lines[index];
-    let mut body = column![
-        text(line.text.as_str())
+    let words = line
+        .words
+        .as_ref()
+        .filter(|_| style.karaoke && distance == 0);
+    let main: Element<'_, Message> = match words {
+        // ponytail: whole words light up; Swift also fills the current word left to right.
+        Some(words) => {
+            let spans: Vec<text::Span<'_, (), iced::Font>> = words
+                .iter()
+                .map(|word| {
+                    let sung = word.start_time <= style.time;
+                    text::Span::new(word.text.as_str()).color(white(if sung { 1.0 } else { 0.35 }))
+                })
+                .collect();
+            rich_text(spans)
+                .size(size)
+                .font(theme::weight(Weight::Bold))
+                .line_height(1.2)
+                .width(Length::Fill)
+                .align_x(align)
+                .into()
+        }
+        None => text(line.text.as_str())
             .size(size)
             .font(theme::weight(Weight::Bold))
             .line_height(1.2)
             .color(white(alpha))
-    ]
-    .spacing(2);
-    if let Some(romanized) = &lyrics.romanized[index] {
+            .width(Length::Fill)
+            .align_x(align)
+            .into(),
+    };
+    let mut body = column![main].spacing(2).align_x(align);
+    if let Some(romanized) = lyrics.romanized[index].as_ref().filter(|_| style.romanize) {
         body = body.push(
             text(romanized.as_str())
                 .size(size * 0.55)
-                .color(white(alpha * 0.75)),
+                .color(white(alpha * 0.75))
+                .width(Length::Fill)
+                .align_x(align),
+        );
+    }
+    // The bar ends slightly before the vocals resume, like Metrolist's -650 ms.
+    let gap = lyrics
+        .gaps
+        .iter()
+        .rfind(|gap| gap.after_index == index)
+        .filter(|gap| style.intervals && (gap.start..=gap.end - 0.65).contains(&style.time));
+    if let Some(gap) = gap {
+        let progress = ((style.time - gap.start) / (gap.end - 0.65 - gap.start)) as f32;
+        body = body.push(
+            container(
+                progress_bar(0.0..=1.0, progress)
+                    .length(120)
+                    .girth(4)
+                    .style(|_| progress_bar::Style {
+                        background: Background::Color(Color {
+                            a: 0.2,
+                            ..Color::WHITE
+                        }),
+                        bar: Background::Color(Color::WHITE),
+                        border: Border::default().rounded(2),
+                    }),
+            )
+            .padding([14, 0]),
         );
     }
     let timed = line.start_time.is_some();

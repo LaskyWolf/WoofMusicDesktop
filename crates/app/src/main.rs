@@ -6,6 +6,7 @@ mod feeds;
 mod glass;
 mod integrations;
 mod login;
+mod lyrics;
 mod media_controls;
 mod now_playing;
 mod pages;
@@ -332,6 +333,8 @@ struct App {
     /// Where podcast episodes and long videos stopped.
     episodes: EpisodePlaybackStore,
     playlist_edit: playlist_edit::State,
+    /// The lyrics options, karaoke greeting and share card.
+    lyrics_extras: lyrics::State,
 }
 
 pub enum Session {
@@ -443,6 +446,8 @@ pub enum Message {
     PlaylistEdit(playlist_edit::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
+    /// The lyrics options menu, karaoke and the share card.
+    Lyrics(lyrics::Message),
     /// A Playback setting changed: transitions use it from the next song.
     Transitions(TransitionSettings),
     /// Sent by `song_menu::root` before the song under the cursor sends `SongMenu`.
@@ -479,8 +484,9 @@ pub enum Message {
 impl App {
     fn new() -> (Self, Task<Message>) {
         let services = Services::new();
+        let settings = settings::State::new(&services);
         let mut stack = vec![Entry {
-            route: Route::Home,
+            route: settings.start_route(),
             offset: 0.0,
         }];
         match dev_route() {
@@ -527,7 +533,6 @@ impl App {
             sign_in_error: None,
             cookie_header: String::new(),
             downloads: downloads::Downloads::default(),
-            settings: settings::State::default(),
             menu: None,
             right_click: Point::ORIGIN,
             window: dev_size().unwrap_or(WINDOW_SIZE),
@@ -543,6 +548,8 @@ impl App {
                 .map(|path| EpisodePlaybackStore::load(&path))
                 .unwrap_or_default(),
             playlist_edit: playlist_edit::State::default(),
+            lyrics_extras: lyrics::State::new(&services),
+            settings,
         };
         app.player.queue.is_repeat_on = app.defaults.repeat;
         app.speed.podcast_rate = app.defaults.podcast_speed;
@@ -1165,11 +1172,34 @@ impl App {
                     Task::batch([saved, transition, episode, slept])
                 }
             }
-            Message::Settings(message) => self.settings.update(message),
+            Message::Settings(message) => self.settings.update(message, &self.services),
             Message::Feeds(message) => {
                 let task = self.feeds.update(message, &self.services);
                 let covers = self.fetch_covers(self.feeds.cover_urls());
                 Task::batch([task, covers])
+            }
+            Message::Lyrics(message) => {
+                let lyrics = match &self.lyrics {
+                    Some((id, Load::Loaded(lyrics)))
+                        if self.player.song().is_some_and(|song| song.video_id == *id) =>
+                    {
+                        Some(&**lyrics)
+                    }
+                    _ => None,
+                };
+                let cx = lyrics::Context {
+                    services: &self.services,
+                    song: self.player.song(),
+                    lyrics,
+                    artwork: self
+                        .artwork
+                        .as_ref()
+                        .filter(|(id, _)| self.player.song().is_some_and(|s| s.video_id == *id))
+                        .map(|(_, artwork)| artwork),
+                    time: self.player.position,
+                    prefs: &self.settings.prefs,
+                };
+                self.lyrics_extras.update(message, cx)
             }
             Message::Transitions(settings) => {
                 let Some(transitions) = &mut self.transitions else {
@@ -1377,7 +1407,7 @@ impl App {
             }
             Action::CopyLink => Task::batch([
                 self.settings
-                    .update(settings::Message::CopyLink(song.video_id)),
+                    .update(settings::Message::CopyLink(song.video_id), &self.services),
                 self.notify("Song link copied"),
             ]),
             Action::Download => self.update_download(downloads::Msg::Start(Box::new(song))),
@@ -1807,6 +1837,7 @@ impl App {
                     .map(|_| Message::Download(downloads::Msg::Tick)),
             );
         }
+        subscriptions.push(self.lyrics_extras.subscription(self.showing_lyrics()));
         Subscription::batch(subscriptions)
     }
 
@@ -1827,7 +1858,10 @@ impl App {
         let now_playing = self.player.song().filter(|_| self.now_playing);
         let (backdrop, page) = match now_playing {
             Some(song) => (
-                now_playing::background(self.current_artwork()),
+                now_playing::background(
+                    self.current_artwork(),
+                    self.settings.prefs.player_background_style,
+                ),
                 now_playing::view(
                     &self.covers,
                     self.current_artwork(),
@@ -1836,8 +1870,12 @@ impl App {
                     self.lyrics
                         .as_ref()
                         .filter(|(id, _)| self.lyrics_open && *id == song.video_id)
-                        .map(|(_, lyrics)| {
-                            (lyrics, self.player.seeking.unwrap_or(self.player.position))
+                        .map(|(_, lyrics)| now_playing::LyricsPane {
+                            lyrics,
+                            time: self.player.seeking.unwrap_or(self.player.position),
+                            prefs: &self.settings.prefs,
+                            extras: &self.lyrics_extras,
+                            video_id: &song.video_id,
                         }),
                 ),
             ),
@@ -1888,6 +1926,9 @@ impl App {
             };
             layers = layers.push(song_menu::view(menu, context));
         }
+        if let Some(composer) = self.lyrics_extras.overlay() {
+            layers = layers.push(composer);
+        }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
         }
@@ -1921,6 +1962,8 @@ impl App {
             Route::Settings => self.settings.view(
                 self.transitions.as_ref().map(|t| &t.settings),
                 self.defaults.skip_non_music,
+                &self.services,
+                &self.session,
             ),
             Route::Equalizer => equalizer::view(&self.defaults),
             Route::History => pages::history(covers, &self.feeds, playing),
@@ -2602,8 +2645,11 @@ mod tests {
     use trop::playback::playback_state_service::{PlayRecord, save};
 
     fn app() -> App {
+        let services = Services::for_test();
         App {
-            services: Services::for_test(),
+            settings: settings::State::new(&services),
+            lyrics_extras: lyrics::State::new(&services),
+            services,
             maximized: false,
             stack: vec![Entry {
                 route: Route::Home,
@@ -2632,7 +2678,6 @@ mod tests {
             sign_in_error: None,
             cookie_header: String::new(),
             downloads: downloads::Downloads::default(),
-            settings: settings::State::default(),
             menu: None,
             right_click: Point::ORIGIN,
             window: WINDOW_SIZE,

@@ -10,6 +10,7 @@ use swiftytube::auth::secure_store::{SecureAuthStore, SecureStore};
 use swiftytube::auth::session_importer::SessionImporter;
 use swiftytube::core::swiftytube_config::SwiftyTubeConfig;
 use swiftytube::core::youtube_client::YouTubeClient;
+use swiftytube::core::youtube_locale::YouTubeLocale;
 use swiftytube::networking::artwork_urls::ArtworkURLs;
 use swiftytube::networking::http_client::Session;
 use swiftytube::networking::inner_tube_client::InnerTubeClient;
@@ -20,7 +21,7 @@ use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
 use trop::audio::lyrics::lyrics_manager::LyricsManager;
 use trop::audio::lyrics::lyrics_service::{LyricLine, LyricsService, LyricsSong};
-use trop::audio::lyrics::lyrics_view;
+use trop::audio::lyrics::lyrics_view::{self, InstrumentalGap};
 use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::audio::sponsor_block::{self, Segment};
@@ -44,6 +45,7 @@ use trop::search::search_service::SearchService;
 use trop::services::download_manager::{DownloadManager, Resolved};
 use trop::services::personalization_service::{self, RadioOptions};
 use trop::services::sync_bridge::SyncBridge;
+use trop::settings::settings_store::SettingsStore;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
 use crate::{Detail, Route};
@@ -59,6 +61,8 @@ pub struct Services {
     lyrics: Arc<LyricsService>,
     providers: StreamResolveProviders,
     http: reqwest::Client,
+    /// The app's copy, for the requests that read a setting.
+    settings: std::sync::RwLock<SettingsStore>,
 }
 
 /// A song's lyrics as Now Playing lists them.
@@ -70,6 +74,8 @@ pub struct Lyrics {
     pub romanized: Vec<Option<String>>,
     /// The provider that answered, for the credit under the lines.
     pub provider: Option<String>,
+    /// Instrumental breaks, after which line they come.
+    pub gaps: Vec<InstrumentalGap>,
 }
 
 impl Lyrics {
@@ -119,22 +125,34 @@ impl Services {
             db,
             providers: StreamResolveProviders::live(),
             http: reqwest::Client::new(),
+            settings: Default::default(),
         })
+    }
+
+    /// Hands the settings to the region, lyrics providers and library sync;
+    /// later streams, Home loads and plays read them too.
+    pub fn apply_settings(&self, settings: &SettingsStore) {
+        let (gl, hl) = settings.locale();
+        self.client.update_locale(YouTubeLocale::new(gl, hl));
+        *self.lyrics.manager.settings.lock().unwrap() = settings.lyrics_settings();
+        self.sync.set_options(settings.sync_options());
+        *self.settings.write().unwrap() = settings.clone();
+    }
+
+    fn settings(&self) -> SettingsStore {
+        self.settings.read().unwrap().clone()
     }
 
     /// Fetches `song`'s lyrics from the Trop providers and romanizes them.
     /// A provider that answered without lyrics is not an error: the lines are empty.
     pub async fn lyrics(self: Arc<Self>, song: SongItem) -> Result<Arc<Lyrics>, String> {
-        let query = LyricsSong {
-            video_id: song.video_id.clone(),
-            title: song.title,
-            artist: crate::ui::artists(&song.artists),
-            album: song.album.filter(|album| !album.is_empty()),
-            duration: song.duration as f64,
-        };
-        let lines = match self.lyrics.fetch_lyrics(&query).await {
-            Ok(lines) => lyrics_view::display_lines(&lines),
-            Err(error) if error.is_answer() => Vec::new(),
+        let query = lyrics_song(&song);
+        let (lines, gaps) = match self.lyrics.fetch_lyrics(&query).await {
+            Ok(lines) => (
+                lyrics_view::display_lines(&lines),
+                lyrics_view::detect_gaps(&lines),
+            ),
+            Err(error) if error.is_answer() => (Vec::new(), Vec::new()),
             Err(error) => return Err(error.to_string()),
         };
         let provider = self
@@ -152,14 +170,45 @@ impl Services {
                 lines,
                 romanized,
                 provider,
+                gaps,
             })
         })
         .await
         .ok_or_else(|| "Romanizing the lyrics failed".to_owned())
     }
 
+    /// Asks the providers again, replacing an edited or picked copy.
+    pub async fn refetch_lyrics(self: Arc<Self>, song: SongItem) {
+        self.lyrics.refetch(&lyrics_song(&song)).await;
+    }
+
+    /// The lyrics without timestamps, for the clipboard.
+    pub fn lyrics_text(&self, video_id: &str) -> Option<String> {
+        self.lyrics.plain_text_for_copy(video_id)
+    }
+
+    pub fn karaoke_enabled(&self) -> bool {
+        self.lyrics.karaoke_enabled()
+    }
+
+    /// Saves the karaoke switch; turning it on looks for word-timed lyrics of `song`.
+    pub fn set_karaoke(&self, on: bool, song: Option<&SongItem>) {
+        self.lyrics.set_karaoke_enabled(on);
+        if let Some(song) = song.filter(|_| on) {
+            self.lyrics.request_word_timing(&lyrics_song(song));
+        }
+    }
+
+    /// Bumped when a song's lyrics changed in the background (word timing found).
+    pub fn lyrics_refresh_token(&self) -> u64 {
+        self.lyrics.state().refresh_token
+    }
+
     pub async fn load_home(self: Arc<Self>) -> Result<Vec<HomeSection>, String> {
+        let settings = self.settings();
         let mut home = HomeViewModel::new(self.client.clone());
+        home.hide_explicit = settings.hide_explicit;
+        home.show_quick_picks = settings.show_quick_picks;
         home.load().await.map_err(|error| error.to_string())?;
         Ok(home.home_sections())
     }
@@ -282,6 +331,10 @@ impl Services {
     }
 
     pub async fn save_plays(self: Arc<Self>, song: Option<SongItem>, records: Vec<PlayRecord>) {
+        // Swift "Track Play History" off: playback is not recorded.
+        if !self.settings().track_play_history {
+            return;
+        }
         let db = self.db.clone();
         if let Some(Err(error)) = blocking(move || save(&db, song.as_ref(), &records)).await {
             eprintln!("Could not save play time: {error}");
@@ -397,7 +450,11 @@ impl Services {
         if let Some(Some(path)) = blocking(move || this.downloads.local_path(&id)).await {
             return Ok(path.to_string_lossy().into_owned());
         }
-        let request = StreamResolveRequest::playback(&video_id, StreamResolveOptions::default());
+        let options = StreamResolveOptions {
+            audio_quality: self.settings().audio_quality,
+            ..StreamResolveOptions::default()
+        };
+        let request = StreamResolveRequest::playback(&video_id, options);
         StreamFallback::resolve_first_valid(
             &request,
             &self.client,
@@ -529,6 +586,16 @@ fn keyring() -> SecureAuthStore {
 }
 
 /// Keyring and child-process calls block: off the async workers. `None` if the task panicked.
+fn lyrics_song(song: &SongItem) -> LyricsSong {
+    LyricsSong {
+        video_id: song.video_id.clone(),
+        title: song.title.clone(),
+        artist: crate::ui::artists(&song.artists),
+        album: song.album.clone().filter(|album| !album.is_empty()),
+        duration: song.duration as f64,
+    }
+}
+
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     tokio::task::spawn_blocking(work).await.ok()
 }
@@ -756,6 +823,7 @@ impl Services {
             db,
             providers: StreamResolveProviders::none(),
             http: reqwest::Client::new(),
+            settings: Default::default(),
         })
     }
 }

@@ -80,8 +80,11 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] SponsorBlock skips the non-music parts of music videos (`SponsorBlock`)
 - [ ] Comments panel (`Comments/`)
 - [x] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
-- [ ] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
-- [ ] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
+- [x] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
+- [x] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
+- [ ] Lyrics menu: Edit Lyrics and Search Lyrics sheets; karaoke fill inside the current word (`LyricsOptionsMenu`, `KaraokeLineText`)
+- [ ] Share card looks: other backgrounds, frames and text styles, stickers, QR code, video (`ShareCardStudio`)
+- [ ] Settings without a desktop counterpart yet: accent colour, library layout, persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`)
 - [ ] Profile and Recap (`Profile/`)
 - [ ] ListenTogether (`ListenTogether/`)
 
