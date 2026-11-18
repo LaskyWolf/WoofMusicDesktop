@@ -407,9 +407,12 @@ impl LibrarySyncStore for TropLibraryStore {
     fn save_song(&self, song: &SyncSong) -> Result<(), StoreError> {
         self.db.write(|db| {
             let mut entity = SongEntity::from(song);
-            // Sync doesn't know this flag: keep the stored one.
-            entity.is_unavailable = DatabaseService::fetch_one_in::<SongEntity>(db, &song.id)?
-                .is_some_and(|stored| stored.is_unavailable);
+            if let Some(stored) = DatabaseService::fetch_one_in::<SongEntity>(db, &song.id)? {
+                // Sync doesn't know this flag: keep the stored one.
+                entity.is_unavailable = stored.is_unavailable;
+                // Playback may have banked time since `song` was read.
+                entity.total_play_time = entity.total_play_time.max(stored.total_play_time);
+            }
             DatabaseService::save_in(db, &entity)
         })?;
         Ok(())
