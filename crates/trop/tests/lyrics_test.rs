@@ -230,6 +230,22 @@ fn lrc_timestamps_with_two_or_three_digit_fractions_or_none() {
 }
 
 #[test]
+fn lrc_with_byte_order_mark_keeps_first_line() {
+    let lines = LyricsParsing::parse_lrc("\u{FEFF}[00:01.00]hello\n[00:02.00]world");
+    assert_eq!(texts(&lines), ["hello", "world"]);
+}
+
+#[test]
+fn lyrics_past_100_minutes_round_trip() {
+    let mut lines = LyricsParsing::parse_lrc("[99:59.00]a");
+    lines[0].start_time = Some(6000.0 + 5.0);
+    let raw = LyricsParsing::serialize_lines(&lines);
+    assert_eq!(raw, "[100:05.00]a");
+    let back = LyricsParsing::parse_stored_text(&raw);
+    assert_eq!(back[0].start_time, Some(6005.0));
+}
+
+#[test]
 fn lrc_multi_time_line_is_one_line_at_its_last_time() {
     let lines = LyricsParsing::parse_lrc("[00:01.00][00:05.00]Chorus");
     assert_eq!(texts(&lines), ["Chorus"]);

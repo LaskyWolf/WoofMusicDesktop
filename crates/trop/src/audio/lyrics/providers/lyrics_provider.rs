@@ -44,12 +44,12 @@ pub trait LyricsProvider: Send + Sync {
 
 /// One or more leading [..] tags.
 static LEADING_TAGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?:\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\])+").unwrap());
+    LazyLock::new(|| Regex::new(r"^(?:\[(\d+):(\d{1,2})(?:\.(\d{1,3}))?\])+").unwrap());
 static TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?\]").unwrap());
+    LazyLock::new(|| Regex::new(r"\[(\d+):(\d{1,2})(?:\.(\d{1,3}))?\]").unwrap());
 /// Enhanced LRC word tag: `<mm:ss.xx>`.
 static WORD_TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?>").unwrap());
+    LazyLock::new(|| Regex::new(r"<(\d+):(\d{1,2})(?:\.(\d{1,3}))?>").unwrap());
 /// Netease klyric / yrc and Kugou KRC line start `[startMs,durationMs]`.
 static KLYRIC_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[(\d+),\d+\]").unwrap());
 /// Netease klyric word tag `(x,durationMs)`.
@@ -80,8 +80,10 @@ const KRC_KEY: [u8; 16] = [
     64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105,
 ];
 
-/// Splits on `\n` and `\r`, dropping empty pieces (Swift `split(whereSeparator: \.isNewline)`).
+/// Splits on `\n` and `\r`, dropping empty pieces (Swift `split(whereSeparator: \.isNewline)`)
+/// and a leading byte order mark, which would hide the first line's tag.
 fn split_lines(raw: &str) -> impl Iterator<Item = &str> {
+    let raw = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
     raw.split(['\n', '\r']).filter(|line| !line.is_empty())
 }
 
