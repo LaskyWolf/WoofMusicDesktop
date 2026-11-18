@@ -556,7 +556,7 @@ impl InnerTubeClient {
     ) -> Result<JsonDict, InnerTubeError> {
         let mut body = self.body(client, locale.as_ref());
         body.insert("feedbackTokens".into(), json!(tokens));
-        self.post("feedback", body, client, RetryPolicy::INNER_TUBE)
+        self.post("feedback", body, client, RetryPolicy::SINGLE_ATTEMPT)
             .await
     }
 
@@ -578,7 +578,7 @@ impl InnerTubeClient {
             "browse/edit_playlist",
             body,
             client,
-            RetryPolicy::INNER_TUBE,
+            RetryPolicy::SINGLE_ATTEMPT,
         )
         .await
     }
@@ -594,7 +594,7 @@ impl InnerTubeClient {
         let mut body = self.body(client, locale.as_ref());
         body.insert("title".into(), title.into());
         insert_some(&mut body, "description", description);
-        self.post("playlist/create", body, client, RetryPolicy::INNER_TUBE)
+        self.post("playlist/create", body, client, RetryPolicy::SINGLE_ATTEMPT)
             .await
     }
 
@@ -607,7 +607,7 @@ impl InnerTubeClient {
     ) -> Result<JsonDict, InnerTubeError> {
         let mut body = self.body(client, locale.as_ref());
         body.insert("playlistId".into(), playlist_id.into());
-        self.post("playlist/delete", body, client, RetryPolicy::INNER_TUBE)
+        self.post("playlist/delete", body, client, RetryPolicy::SINGLE_ATTEMPT)
             .await
     }
 
