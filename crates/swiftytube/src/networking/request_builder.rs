@@ -48,10 +48,15 @@ impl RequestBuilder {
         playlist_id: Option<&str>,
     ) -> Option<Request> {
         let mut url = Url::parse(tracking_url).ok()?;
+        // Rust only: a URL that names its viewing (`cpn`) keeps it, so all
+        // reports of one play share it (Trop `YouTubeHistoryReport`).
+        let has_cpn = url.query_pairs().any(|(key, _)| key == "cpn");
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("c", client.client_name);
-            query.append_pair("cpn", &Self::random_cpn());
+            if !has_cpn {
+                query.append_pair("cpn", &Self::random_cpn());
+            }
             query.append_pair("ver", "2");
             if let Some(playlist_id) = playlist_id {
                 query.append_pair("list", playlist_id);

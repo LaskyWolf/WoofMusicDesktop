@@ -1,6 +1,7 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
 mod downloads;
+mod feeds;
 mod glass;
 mod integrations;
 mod login;
@@ -41,11 +42,12 @@ use services::{Artwork, Library, Lyrics, Services};
 use swiftytube::auth::account_info::AccountInfo;
 use transitions::Transitions;
 use trop::playback::playback_state_service::{PlayRecord, PlaybackStateService};
+use trop::playback::youtube_history_report::YouTubeHistoryReport;
 
 pub(crate) const APP_ID: &str = "com.laskywolf.woofmusic";
 
 /// Rows past this many get no cover download until long lists are virtualized.
-const MAX_ROW_COVERS: usize = 300;
+pub(crate) const MAX_ROW_COVERS: usize = 300;
 
 /// Previous restarts the song instead once it has played this long, in seconds.
 const RESTART_AFTER: f64 = 3.0;
@@ -99,6 +101,10 @@ pub enum Route {
     /// Saved songs and downloads in progress.
     Downloads,
     Settings,
+    /// Plays from this app and YouTube Music's own history.
+    History,
+    /// New releases from followed artists.
+    Activity,
 }
 
 impl Route {
@@ -124,7 +130,13 @@ impl Route {
             Route::LikedSongs => Some("liked".to_owned()),
             Route::TopSongs => Some("top100".to_owned()),
             Route::Downloads => Some("downloads".to_owned()),
-            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => None,
+            Route::Home
+            | Route::Explore
+            | Route::Library
+            | Route::Search
+            | Route::Settings
+            | Route::History
+            | Route::Activity => None,
         }
     }
 }
@@ -276,6 +288,10 @@ struct App {
     artwork: Option<(String, Artwork)>,
     /// Counts how long each song plays, for My Top 100 and history.
     plays: PlaybackStateService,
+    /// The current song's play as YouTube Music's history knows it, once it counts as listened.
+    report: Option<Arc<YouTubeHistoryReport>>,
+    /// The History and Activity pages.
+    feeds: feeds::Feeds,
     /// Crossfades and AutoMix between songs; `None` without libmpv.
     transitions: Option<Transitions>,
     session: Session,
@@ -391,6 +407,8 @@ pub enum Message {
     Settings(settings::Message),
     /// A Playback setting changed: transitions use it from the next song.
     Transitions(TransitionSettings),
+    /// The History and Activity pages.
+    Feeds(feeds::Msg),
 }
 
 impl App {
@@ -429,6 +447,8 @@ impl App {
             queue_list: virtual_list::State::default(),
             artwork: None,
             plays: PlaybackStateService::default(),
+            report: None,
+            feeds: feeds::Feeds::default(),
             transitions: services
                 .player
                 .clone()
@@ -573,8 +593,21 @@ impl App {
                 self.home = Load::Loading;
                 self.details.clear();
                 self.library = None;
+                self.feeds.reset();
                 let sync = if signed_in { self.sync() } else { Task::none() };
-                Task::batch([load_home(&self.services), self.enter(), account, sync])
+                // Loaded at start, so the sidebar can count new releases (Swift `ActivityNotifier`).
+                let activity = if signed_in {
+                    self.feeds.refresh_activity(&self.services)
+                } else {
+                    Task::none()
+                };
+                Task::batch([
+                    load_home(&self.services),
+                    self.enter(),
+                    account,
+                    sync,
+                    activity,
+                ])
             }
             Message::Download(message) => self.update_download(message),
             Message::Account(result) => {
@@ -848,7 +881,8 @@ impl App {
                 self.plays
                     .set_playing(self.player.state == PlayState::Playing, now);
                 let banked = self.plays.tick(now);
-                let saved = self.save_plays(banked);
+                let reported = self.report_plays(&banked, self.plays.elapsed(now), false);
+                let saved = Task::batch([self.save_plays(banked), reported]);
                 dev_seek_end(&self.services, &self.player);
                 let transition = self.tick_transitions();
                 // A song that played to its end: on to the next one. A song
@@ -865,6 +899,11 @@ impl App {
                 }
             }
             Message::Settings(message) => self.settings.update(message),
+            Message::Feeds(message) => {
+                let task = self.feeds.update(message, &self.services);
+                let covers = self.fetch_covers(self.feeds.cover_urls());
+                Task::batch([task, covers])
+            }
             Message::Transitions(settings) => {
                 let Some(transitions) = &mut self.transitions else {
                     return Task::none();
@@ -902,8 +941,16 @@ impl App {
 
     /// Starts loading what the page on screen needs, unless it is loaded or loading.
     fn enter(&mut self) -> Task<Message> {
+        self.feeds.entered(&self.route().clone());
         match self.route().clone() {
             Route::Home => Task::none(),
+            Route::History => self
+                .feeds
+                .enter_history(&self.services, matches!(self.session, Session::SignedIn(_))),
+            Route::Activity if matches!(self.session, Session::SignedIn(_)) => {
+                self.feeds.enter_activity(&self.services)
+            }
+            Route::Activity => Task::none(),
             // Read on every visit: sync and bookmarks change it.
             Route::Library if matches!(self.session, Session::SignedIn(_)) => {
                 if matches!(self.library, Some(Load::Failed(_))) {
@@ -953,6 +1000,39 @@ impl App {
             .find(|song| song.video_id == *video_id)
             .cloned();
         Task::future(self.services.clone().save_plays(song, records)).discard()
+    }
+
+    /// Sends the play to YouTube Music's history (Swift `YouTubeHistoryReport`):
+    /// opens it once it counts as listened (`PlayRecord::Playback`), then reports
+    /// the time played every 30 s and when the song ends (`last`).
+    fn report_plays(
+        &mut self,
+        records: &[PlayRecord],
+        elapsed: Duration,
+        last: bool,
+    ) -> Task<Message> {
+        let mut tasks = Vec::new();
+        let url = (self.report.as_ref()).and_then(|r| r.watch(elapsed.as_secs_f64(), last));
+        if let Some(url) = url {
+            tasks.push(Task::future(self.services.clone().send_report(url)).discard());
+        }
+        if last {
+            self.report = None;
+        }
+        for record in records {
+            if let PlayRecord::Playback { video_id, ms } = record {
+                let report = Arc::new(YouTubeHistoryReport::new(video_id));
+                // A play recorded as it ends has no later reports.
+                if !last {
+                    self.report = Some(report.clone());
+                }
+                let seconds = *ms as f64 / 1000.0;
+                tasks.push(
+                    Task::future(self.services.clone().start_report(report, seconds)).discard(),
+                );
+            }
+        }
+        Task::batch(tasks)
     }
 
     /// Swift `SyncBridge.checkAndSyncIfStale`, at sign-in and when Library opens.
@@ -1032,9 +1112,12 @@ impl App {
         };
         let video_id = song.video_id.clone();
         let cover = song.thumbnail_url.clone();
-        let finished = self.plays.stop_tracking(Instant::now());
+        let now = Instant::now();
+        let elapsed = self.plays.elapsed(now);
+        let finished = self.plays.stop_tracking(now);
         self.plays.start_tracking(&video_id);
-        let saved = self.save_plays(finished);
+        let reported = self.report_plays(&finished, elapsed, true);
+        let saved = Task::batch([self.save_plays(finished), reported]);
         self.player.error = None;
         self.player.position = 0.0;
         self.player.duration = 0.0;
@@ -1208,7 +1291,12 @@ impl App {
         if now_playing.is_none() && scrolled {
             layers = layers.push(ui::scroll_edge());
         }
-        let mut layers = layers.push(sidebar(&self.stack[0].route, &self.covers, &self.session));
+        let mut layers = layers.push(sidebar(
+            &self.stack[0].route,
+            &self.covers,
+            &self.session,
+            self.feeds.unseen(),
+        ));
         if self.queue_open && self.player.song().is_some() {
             layers = layers.push(now_playing::queue(
                 &self.covers,
@@ -1254,6 +1342,15 @@ impl App {
             Route::Settings => self
                 .settings
                 .view(self.transitions.as_ref().map(|t| &t.settings)),
+            Route::History => pages::history(covers, &self.feeds, playing),
+            Route::Activity => match &self.session {
+                Session::SignedIn(_) => pages::activity(covers, self.feeds.activity.as_deref()),
+                session => pages::sign_in(
+                    matches!(session, Session::SigningIn),
+                    &self.cookie_header,
+                    self.sign_in_error,
+                ),
+            },
             Route::Explore => match &self.explore {
                 Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
@@ -1552,6 +1649,8 @@ fn dev_route() -> Option<Route> {
             "explore" => Some(Route::Explore),
             "search" => Some(Route::Search),
             "settings" => Some(Route::Settings),
+            "history" => Some(Route::History),
+            "activity" => Some(Route::Activity),
             _ => None,
         },
     }
@@ -1641,18 +1740,43 @@ fn transport_button<'a>(
         })
 }
 
-fn sidebar<'a>(root: &Route, covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Message> {
+fn sidebar<'a>(
+    root: &Route,
+    covers: &'a ui::Covers,
+    session: &'a Session,
+    unseen: usize,
+) -> Element<'a, Message> {
     let item = |(route, label): (Route, &'static str)| {
         let selected = *root == route;
+        // New releases not seen yet (the iOS notification badge).
+        let badge = (route == Route::Activity && unseen > 0).then(|| {
+            container(
+                text(unseen.min(99).to_string())
+                    .size(11)
+                    .font(theme::weight(Weight::Bold))
+                    .color(theme::BACKGROUND),
+            )
+            .padding([1, 7])
+            .style(|_| container::Style {
+                background: Some(Background::Color(theme::ACCENT)),
+                border: Border::default().rounded(9),
+                ..container::Style::default()
+            })
+        });
         button(
-            text(label)
-                .size(15)
-                .font(theme::weight(Weight::Medium))
-                .color(if selected {
-                    theme::TEXT
-                } else {
-                    theme::SECONDARY
-                }),
+            row![
+                text(label)
+                    .size(15)
+                    .font(theme::weight(Weight::Medium))
+                    .color(if selected {
+                        theme::TEXT
+                    } else {
+                        theme::SECONDARY
+                    })
+                    .width(Length::Fill),
+            ]
+            .push(badge)
+            .align_y(Alignment::Center),
         )
         .padding([8, 12])
         .width(Length::Fill)
@@ -1689,6 +1813,9 @@ fn sidebar<'a>(root: &Route, covers: &'a ui::Covers, session: &'a Session) -> El
         .map(Message::TitleBar),
     ]
     .extend(Route::TABS.map(item).map(Element::from))
+    .push(Space::new().height(14))
+    .push(item((Route::History, "History")))
+    .push(item((Route::Activity, "New releases")))
     .push(Space::new().height(Length::Fill))
     .push(item((Route::Settings, "Settings")))
     .push(account(covers, session))

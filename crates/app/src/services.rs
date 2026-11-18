@@ -36,6 +36,7 @@ use trop::networking::models::yt_item::{
     AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTArtist, YTItem,
 };
 use trop::playback::playback_state_service::{PlayRecord, save};
+use trop::playback::youtube_history_report::YouTubeHistoryReport;
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::services::download_manager::{DownloadManager, Resolved};
@@ -239,9 +240,13 @@ impl Services {
                     tracks.iter().map(crate::downloads::song).collect(),
                 )))
             }
-            Route::Home | Route::Explore | Route::Library | Route::Search | Route::Settings => {
-                Err("Not a detail page.".to_owned())
-            }
+            Route::Home
+            | Route::Explore
+            | Route::Library
+            | Route::Search
+            | Route::Settings
+            | Route::History
+            | Route::Activity => Err("Not a detail page.".to_owned()),
         }
     }
 
@@ -277,6 +282,19 @@ impl Services {
         if let Some(Err(error)) = blocking(move || save(&db, song.as_ref(), &records)).await {
             eprintln!("Could not save play time: {error}");
         }
+    }
+
+    /// Opens `report`'s play in YouTube Music's history and reports its first `seconds`.
+    pub async fn start_report(self: Arc<Self>, report: Arc<YouTubeHistoryReport>, seconds: f64) {
+        let timestamp = match &self.providers.signature_timestamp {
+            Some(provider) => provider().await,
+            None => None,
+        };
+        report.start(&self.client, timestamp, seconds).await;
+    }
+
+    pub async fn send_report(self: Arc<Self>, url: String) {
+        YouTubeHistoryReport::send(&self.client, url).await;
     }
 
     // MARK: - Session

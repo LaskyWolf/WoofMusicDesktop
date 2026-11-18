@@ -23,6 +23,8 @@ Same rules as `crates/swiftytube/README.md`, plus:
 | `UIImage` drawn into a `CGContext` | 8-bit RGBA byte slices; the caller decodes and scales the image |
 | In-memory caches (`ArtistDetailCache`, `MoodDetailCache`) | `static Mutex<HashMap>` with `Instant` timestamps |
 | GRDB `DatabasePool` in `actor DatabaseService` | `Mutex<rusqlite::Connection>` (bundled SQLite, WAL); synchronous methods, callers run them off the UI thread |
+| `ActivityStore` seen ids in `UserDefaults` | `activity::activity_store::SeenIds`: a JSON array in `activity_defaults.json`, next to `sync_defaults.json` |
+| `ActivityNotifier` (iOS notifications, background refresh) | not ported: the app loads Activity at sign-in and the sidebar shows the unread count |
 | GRDB `DatabaseMigrator` | `database_service::migrate`: one transaction per migration, applied ids in `grdb_migrations` like GRDB |
 | GRDB `create(table:)` / `alter(table:)` | the SQL GRDB generates, same names, types and defaults |
 | `FetchableRecord & PersistableRecord` entities | `Record` trait (`TABLE`, `COLUMNS`, `PRIMARY_KEY`, `from_row`, `values`) in `database/mod.rs` |
