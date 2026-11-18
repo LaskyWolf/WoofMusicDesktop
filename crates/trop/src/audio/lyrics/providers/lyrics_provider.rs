@@ -105,29 +105,41 @@ impl LyricsParsing {
         (int(1) * 60 + int(2)) as f64 + frac
     }
 
-    /// Parses an `[mm:ss.xx]` or `[mm:ss]` timestamp at the start of a line.
-    /// The time is the last tag anywhere in the line, so `[00:01][00:05]x` is one line at 5 s.
-    pub fn parse_lrc_timestamp(line: &str) -> Option<(f64, String)> {
+    /// Parses the `[mm:ss.xx]` or `[mm:ss]` timestamps at the start of a line.
+    /// Compressed LRC gives one text several times: `[00:10][01:20]x` is shown at 10 s and 80 s.
+    pub fn parse_lrc_timestamps(line: &str) -> Option<(Vec<f64>, String)> {
         let lead = LEADING_TAGS.find(line)?;
-        let last = TAG.captures_iter(line).last()?;
-        Some((
-            Self::tag_seconds(&last),
-            line[lead.end()..].trim().to_string(),
-        ))
+        let times = TAG
+            .captures_iter(lead.as_str())
+            .map(|tag| Self::tag_seconds(&tag))
+            .collect();
+        Some((times, line[lead.end()..].trim().to_string()))
     }
 
-    /// Split a raw LRC string into lines. Blank timestamped lines are kept:
-    /// they mark instrumental spans.
+    /// Split a raw LRC string into lines sorted by time. Blank timestamped
+    /// lines are kept: they mark instrumental spans.
     pub fn parse_lrc(raw: &str) -> Vec<LyricLine> {
-        split_lines(raw)
-            .filter_map(|line| {
-                let (time, text) = Self::parse_lrc_timestamp(line)?;
-                Some(match Self::parse_word_tags(&text) {
-                    None => LyricLine::new(text, Some(time)),
-                    Some((plain, words)) => LyricLine::with_words(plain, Some(time), words),
-                })
-            })
-            .collect()
+        let mut lines: Vec<LyricLine> = Vec::new();
+        for line in split_lines(raw) {
+            let Some((times, text)) = Self::parse_lrc_timestamps(line) else {
+                continue;
+            };
+            let parsed = Self::parse_word_tags(&text);
+            for time in times {
+                lines.push(match &parsed {
+                    None => LyricLine::new(text.clone(), Some(time)),
+                    Some((plain, words)) => {
+                        LyricLine::with_words(plain.clone(), Some(time), words.clone())
+                    }
+                });
+            }
+        }
+        lines.sort_by(|a, b| {
+            a.start_time
+                .unwrap_or(0.0)
+                .total_cmp(&b.start_time.unwrap_or(0.0))
+        });
+        lines
     }
 
     /// Enhanced LRC word tags: `<00:12.00>Never <00:12.50>gonna<00:13.25>`.
