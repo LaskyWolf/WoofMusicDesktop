@@ -1487,10 +1487,11 @@ fn dev_seek_end(services: &Services, player: &Player) {
     else {
         return;
     };
-    if player.duration > lead && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        if let Some(mpv) = &services.player {
-            mpv.seek(player.duration - lead);
-        }
+    if player.duration > lead
+        && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed)
+        && let Some(mpv) = &services.player
+    {
+        mpv.seek(player.duration - lead);
     }
 }
 
