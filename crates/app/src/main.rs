@@ -302,6 +302,8 @@ struct App {
     home: Load<Vec<HomeSection>>,
     /// `None` until Explore is first opened.
     explore: Option<Load<Vec<ExploreSection>>>,
+    /// The family chip chosen on Explore.
+    explore_family: Option<String>,
     details: HashMap<String, Load<Arc<Detail>>>,
     query: String,
     /// The query the results belong to.
@@ -473,6 +475,12 @@ pub enum Message {
     /// A lyric line was clicked: the song jumps to where it starts.
     SeekTo(f64),
     SkipFrame(std::time::Instant),
+    /// Explore's family chip; `None` goes back to all genres.
+    ExploreFamily(Option<String>),
+    /// The path chips of a sub-genre: back to Explore with the family chosen.
+    ExplorePath(String),
+    /// Opens YouTube Studio in the browser to change the profile picture.
+    ChangePicture,
     /// Opens or closes the full-screen cover.
     FullscreenCover(bool),
     LooksFrame(std::time::Instant),
@@ -577,6 +585,8 @@ impl App {
             stack,
             home: Load::Loading,
             explore: None,
+            // Dev aid: WOOF_FAMILY=Pop opens Explore with that family chosen.
+            explore_family: std::env::var("WOOF_FAMILY").ok(),
             details: HashMap::new(),
             query: String::new(),
             searched: String::new(),
@@ -1301,6 +1311,19 @@ impl App {
                 Task::none()
             }
             Message::LooksFrame(_) => Task::none(),
+            Message::ExploreFamily(family) => {
+                self.explore_family = family;
+                Task::none()
+            }
+            Message::ExplorePath(family) => {
+                self.explore_family = Some(family);
+                self.update(Message::Tab(Route::Explore))
+            }
+            Message::ChangePicture => {
+                // The app cannot change it through an API: Studio does, signed in the browser.
+                let _ = integrations::open_in_browser("https://studio.youtube.com/");
+                Task::none()
+            }
             Message::SkipFrame(now) => {
                 self.skip.frame(now);
                 Task::none()
@@ -2668,7 +2691,13 @@ impl App {
                 ),
             },
             Route::Explore => match &self.explore {
-                Some(Load::Loaded(sections)) => pages::explore(covers, sections, playing),
+                Some(Load::Loaded(sections)) => pages::explore(
+                    covers,
+                    sections,
+                    playing,
+                    self.explore_family.as_deref(),
+                    None,
+                ),
                 Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                 _ => ui::status(None, Message::Retry),
             },
@@ -2705,7 +2734,16 @@ impl App {
                         cx(self.saved(route)),
                         &self.episodes,
                     ),
-                    Detail::Mood(sections) => pages::explore(covers, sections, playing),
+                    Detail::Mood(sections) => pages::explore(
+                        covers,
+                        sections,
+                        playing,
+                        None,
+                        match route {
+                            Route::Mood(mood) => pages::mood_path(mood),
+                            _ => None,
+                        },
+                    ),
                     Detail::Songs(songs) if *route == Route::Downloads => {
                         downloads::page(covers, songs, &self.downloads, playing)
                     }
@@ -3427,6 +3465,7 @@ mod tests {
             }],
             home: Load::Loading,
             explore: None,
+            explore_family: None,
             details: HashMap::new(),
             query: String::new(),
             searched: String::new(),

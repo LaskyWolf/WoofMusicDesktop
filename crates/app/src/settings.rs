@@ -1657,8 +1657,8 @@ fn sections<'a>(
 }
 
 /// A pill like the Library filters: white when selected.
-fn chip<'a>(
-    label: &'a str,
+pub(crate) fn chip<'a>(
+    label: impl text::IntoFragment<'a>,
     selected: bool,
     message: crate::Message,
 ) -> Element<'a, crate::Message> {

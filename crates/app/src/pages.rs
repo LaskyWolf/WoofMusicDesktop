@@ -9,6 +9,7 @@ use iced::{Alignment, Background, Border, Color, Element, Gradient, Length, Radi
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
+use trop::explore::mood_card::{MoodFamily, MoodFamilyEntry};
 use trop::networking::models::home_page::{
     ExploreSection, ExploreSectionKind, HomeSection, MoodItem,
 };
@@ -19,6 +20,7 @@ use trop::search::search_parser::SearchSection;
 use crate::collections::{self, Caps, Ctx};
 use crate::playlist_edit;
 use crate::services::Library;
+use crate::settings;
 use crate::ui::{self, Covers};
 use crate::{Load, Message, Route, theme};
 use trop::settings::settings_store::LibraryLayout;
@@ -68,30 +70,137 @@ pub fn explore<'a>(
     covers: &'a Covers,
     sections: &'a [ExploreSection],
     playing: Option<&str>,
+    family: Option<&str>,
+    lead: Option<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    ui::scroll_page(
-        sections
+    let shelves = sections
+        .iter()
+        .filter(|section| !section.items.is_empty() || !section.moods.is_empty())
+        .map(|section| match section.kind {
+            ExploreSectionKind::Moods => family_chips(&section.title, &section.moods, family),
+            _ if section.title.to_lowercase().contains("new albums") => {
+                new_releases(covers, section)
+            }
+            ExploreSectionKind::Rows => {
+                ui::section(covers, &section.title, &section.items, 12, playing)
+            }
+            _ => ui::section(covers, &section.title, &section.items, 10, playing),
+        });
+    ui::scroll_page(lead.into_iter().chain(shelves).collect())
+}
+
+/// Swift `FilterChipBar` of `MoodFamily.entries`: a family with several genres
+/// is one chip, and the chosen family's genres show as cards under the chips.
+fn family_chips<'a>(
+    title: &'a str,
+    all: &'a [MoodItem],
+    family: Option<&str>,
+) -> Element<'a, Message> {
+    let chips = MoodFamily::entries(all)
+        .into_iter()
+        .map(|entry| match entry {
+            MoodFamilyEntry::Group { family: name, .. } => {
+                let chosen = family == Some(name.as_str());
+                let message = Message::ExploreFamily((!chosen).then(|| name.clone()));
+                settings::chip(name, chosen, message)
+            }
+            MoodFamilyEntry::Mood(mood) => settings::chip(
+                mood.title.clone(),
+                false,
+                Message::Navigate(Route::Mood(mood)),
+            ),
+        });
+    let mut page = column![
+        ui::section_title(title),
+        iced::widget::Row::with_children(chips)
+            .spacing(8)
+            .wrap()
+            .vertical_spacing(8),
+    ]
+    .spacing(14);
+    if let Some(family) = family {
+        let genres: Vec<MoodItem> = all
             .iter()
-            .filter(|section| !section.items.is_empty() || !section.moods.is_empty())
-            .map(|section| match section.kind {
-                ExploreSectionKind::Moods => moods(&section.title, &section.moods),
-                ExploreSectionKind::Rows => {
-                    ui::section(covers, &section.title, &section.items, 12, playing)
-                }
-                ExploreSectionKind::Cards => {
-                    ui::section(covers, &section.title, &section.items, 10, playing)
-                }
+            .filter(|mood| MoodFamily::family(&mood.title) == Some(family))
+            .cloned()
+            .collect();
+        page = page.push(moods(format!("{family} sub-genres"), genres));
+    }
+    page.into()
+}
+
+/// Swift `NewReleasesSection`: the shelf on a rounded backdrop, the cards in one row.
+// ponytail: Swift tints each card with its cover's colours, spins a vinyl disc and adds
+// Play and Save to the card; the cards here are the plain tiles.
+fn new_releases<'a>(covers: &'a Covers, section: &'a ExploreSection) -> Element<'a, Message> {
+    let songs = ui::songs_of(&section.items);
+    let cards = iced::widget::Row::with_children(
+        section
+            .items
+            .iter()
+            .map(|item| ui::tile(covers, item, ui::subtitle(item), &songs, false)),
+    )
+    .spacing(10);
+    container(
+        column![
+            ui::section_title(section.title.as_str()),
+            iced::widget::scrollable(cards).direction(
+                iced::widget::scrollable::Direction::Horizontal(
+                    iced::widget::scrollable::Scrollbar::new()
+                        .width(4)
+                        .scroller_width(4),
+                )
+            ),
+        ]
+        .spacing(12),
+    )
+    .padding(14)
+    .width(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(Background::Color(theme::PLACEHOLDER)),
+        border: Border::default().rounded(22),
+        ..container::Style::default()
+    })
+    .into()
+}
+
+/// "Pop › Brazilian Pop ✕" on a sub-genre's page: the family chip and the ✕ both
+/// go back to all of Pop. `None` for a genre that is not in a family, or is the family.
+pub fn mood_path<'a>(mood: &MoodItem) -> Option<Element<'a, Message>> {
+    let family =
+        MoodFamily::family(&mood.title).filter(|f| !f.eq_ignore_ascii_case(&mood.title))?;
+    let pill = |label: String, shade: f32| {
+        button(text(label).size(14).font(theme::weight(Weight::Medium)))
+            .padding([6, 16])
+            .on_press(Message::ExplorePath(family.to_owned()))
+            .style(move |_, _| button::Style {
+                background: Some(Background::Color(Color {
+                    r: theme::accent().r * shade,
+                    g: theme::accent().g * shade,
+                    b: theme::accent().b * shade,
+                    a: 1.0,
+                })),
+                border: Border::default().rounded(18),
+                text_color: Color::WHITE,
+                ..button::Style::default()
             })
-            .collect(),
+    };
+    Some(
+        row![
+            pill(family.to_owned(), 1.0),
+            pill(format!("›  {}  ✕", mood.title), 0.7),
+        ]
+        .spacing(8)
+        .into(),
     )
 }
 
 /// Mood chips: one line each, so every chip in a row has the same height.
-fn moods<'a>(title: &'a str, moods: &'a [MoodItem]) -> Element<'a, Message> {
+fn moods<'a>(title: impl text::IntoFragment<'a>, moods: Vec<MoodItem>) -> Element<'a, Message> {
     const CHIP: f32 = 228.0;
     // Chip width minus padding, swatch and gap.
     const LABEL: f32 = CHIP - 2.0 * 14.0 - 4.0 - 12.0;
-    let chips = moods.iter().map(|mood| {
+    let chips = moods.into_iter().map(|mood| {
         let color = mood
             .color
             .map(|rgb| Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
@@ -117,7 +226,7 @@ fn moods<'a>(title: &'a str, moods: &'a [MoodItem]) -> Element<'a, Message> {
         )
         .padding([10, 14])
         .width(CHIP)
-        .on_press(Message::Navigate(Route::Mood(mood.clone())))
+        .on_press(Message::Navigate(Route::Mood(mood)))
         .style(|_, status| button::Style {
             background: Some(Background::Color(if status == button::Status::Hovered {
                 theme::PRESSED
@@ -1037,4 +1146,17 @@ fn empty_note<'a>(title: &'a str, line: &'a str) -> Element<'a, Message> {
     ]
     .spacing(6)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_sub_genre_has_a_path() {
+        let mood = |title: &str| MoodItem::new(title, None, None);
+        assert!(mood_path(&mood("Brazilian Pop")).is_some());
+        assert!(mood_path(&mood("Pop")).is_none());
+        assert!(mood_path(&mood("Chill")).is_none());
+    }
 }

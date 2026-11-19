@@ -132,6 +132,6 @@ Downloads and song menu [worker: downloads]
 Settings and player looks [worker: polish]
 - [x] Last.fm options, Discord options (not the Discord user status), Transition Effects slider, Quick Picks size (the setting; Home reads it), Diagnostics extras (`LastFMSettingsView`, `DiscordSettingsView`, `DiagnosticsView`)
 - [x] Copy Line on a lyric line (right-click); sleep-end night sky (no glow shader), Radio Bloom (rings and covers; no antenna), full-screen cover (click the cover; no flight), rolling skip glyph, scrolling long titles (`SleepEndedAnimation`, `RadioBloom`, `FullscreenCoverOverlay`, `AnimatedSkipLabel`, `MarqueeText`)
-- [ ] Explore mood family chips with a path, New releases shelf style (`ExploreViewModel`, `NewReleasesSection`); change profile picture (`ProfilePictureWebView`)
+- [x] Explore mood family chips with a path, New releases shelf style (plain tiles on the backdrop), change profile picture (opens YouTube Studio in the browser; Profile page) (`ExploreViewModel`, `NewReleasesSection`, `ProfilePictureWebView`)
 
 Done when: every line above works, and the bug-fix session's checks pass on main.

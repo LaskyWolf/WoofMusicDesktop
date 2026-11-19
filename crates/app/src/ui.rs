@@ -81,7 +81,7 @@ pub fn section<'a>(
     column![section_title(title), body].spacing(14).into()
 }
 
-pub fn section_title(title: &str) -> iced::widget::Text<'_> {
+pub fn section_title<'a>(title: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {
     text(title).size(22).font(theme::weight(Weight::Bold))
 }
 

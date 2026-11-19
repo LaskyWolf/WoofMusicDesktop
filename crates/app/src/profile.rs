@@ -477,10 +477,16 @@ impl Profile {
         .width(Length::Fill);
 
         let account: Element<'a, Message> = if signed_in {
-            settings::group(vec![row_button(
-                text("Sign Out").size(15).color(theme::CLOSE).into(),
-                Some(Message::SignOut),
-            )])
+            settings::group(vec![
+                row_button(
+                    text("Change Profile Picture").size(15).into(),
+                    Some(Message::ChangePicture),
+                ),
+                row_button(
+                    text("Sign Out").size(15).color(theme::CLOSE).into(),
+                    Some(Message::SignOut),
+                ),
+            ])
         } else {
             column![
                 settings::group(vec![row_button(
