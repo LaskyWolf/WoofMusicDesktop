@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch: # builds the packages without a release, as artifacts
 
 jobs:
   check:
@@ -39,18 +40,36 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
-      # Packages, on v* tags only.
+      # Packages, on v* tags and manual runs.
       - name: Build release binary
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: cargo build --release -p woofmusic
       - name: AppImage
-        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Linux'
         run: packaging/linux/appimage.sh
       - name: Installer
-        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
         run: |
           choco install innosetup -y --no-progress
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$("${{ github.ref_name }}".TrimStart('v'))" packaging\windows\woofmusic.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$("${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.0.0' }}".TrimStart('v'))" packaging\windows\woofmusic.iss
+      # Opens the app, saves a picture of its first page and quits.
+      - name: Launch on Windows
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
+        run: |
+          $env:WOOF_SNAPSHOT = "$pwd\windows-home.png"
+          $env:WOOF_SNAPSHOT_DELAY = '8000'
+          $app = Start-Process target\release\woofmusic.exe -PassThru
+          if (-not $app.WaitForExit(120000)) { $app.Kill(); throw 'the app did not quit within 2 minutes' }
+          if (-not (Test-Path windows-home.png)) { throw "the app quit with code $($app.ExitCode) and saved no picture" }
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: woofmusic-${{ runner.os }}
+          path: |
+            WoofMusic-x86_64.AppImage
+            target/installer/*.exe
+            windows-home.png
+          if-no-files-found: ignore
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
