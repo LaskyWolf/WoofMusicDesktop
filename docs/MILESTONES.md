@@ -105,3 +105,33 @@ Done when: every WoofMusic iOS feature above works on desktop.
 - [x] README install steps
 
 Done when: a `v*` tag publishes both packages and they install on a clean system.
+
+## R9: Parity gaps
+
+Found by comparing every `Trop/` Swift file with the Rust code. Owner in brackets.
+
+Home and Search [main]
+- [ ] Personal Home sections: Quick Picks from history, Keep Listening, Forgotten Favorites, Daily Discover, Similar to <artist>, community playlists (`PersonalizationService`, `HomeViewModel`)
+- [ ] Your Mixes row (`MixesRow`), Pin to Quick Picks (`PinState`), Home mood chips (`ChipsRowView`), Keep Listening strip, podcast radio dial tiles (`RadioDialTile`)
+- [ ] Last Home page shown at launch, more pages on scroll (`SavedHome`), shimmer placeholders (`ShimmerLoadingView`)
+- [ ] Search: recent searches and the Track Search History setting, suggestions while typing, filter chips, section drill-down, sort, artist hero card, library results, incognito (`Search/`)
+- [ ] Open music links: pasted in Search, `woofmusic <link>` and `woofmusic://open?url=`; Odesli API key in Integrations (`MusicLinkOpener`, `ShazamLink`, `OdesliSettingsView`)
+- [ ] Several accounts with a library each (`ProfileView`, `ProfileStorage`)
+
+Pages and cards [worker: pages]
+- [ ] Detail pages: Shuffle, Save album to library, Subscribe to artist and podcast, Share and copy link, Add page to queue (`PlaylistActionsMenu`)
+- [ ] Right-click menus on album, playlist and artist cards (`CardContextMenu`)
+- [ ] Multi-select with bulk actions on album, playlist and History pages (`BulkSongActions`)
+- [ ] 2x2 cover mosaic for playlists without a cover (`ArtworkMosaicView`); podcast resume card, episode status tags, expandable description (`PodcastDetailView`)
+
+Downloads and song menu [worker: downloads]
+- [ ] Download a whole album or playlist with a progress card; downloaded badges (`DownloadManager` batches, `LibraryDownloadCard`, `DownloadedCollections`)
+- [ ] Downloads More menu, Remove Download(s), Download Settings: storage, quality, auto-download on like, new episodes (`DownloadsMoreSheet`, `DownloadSettingsView`)
+- [ ] Song menu: Similar Songs, Song Details, artist picker for several artists, artist kind label, Added by (`RadioViews`, `ArtistPickerSheet`, `ArtistKindService`)
+
+Settings and player looks [worker: polish]
+- [ ] Last.fm options, Discord options, Transition Effects slider, Quick Picks size, Diagnostics extras (`LastFMSettingsView`, `DiscordSettingsView`, `DiagnosticsView`)
+- [ ] Copy Line on a lyric line; sleep-end night sky, Radio Bloom, full-screen cover, rolling skip glyph, scrolling long titles (`SleepEndedAnimation`, `RadioBloom`, `FullscreenCoverOverlay`, `AnimatedSkipLabel`, `MarqueeText`)
+- [ ] Explore mood family chips with a path, New releases shelf style (`ExploreViewModel`, `NewReleasesSection`); change profile picture (`ProfilePictureWebView`)
+
+Done when: every line above works, and the bug-fix session's checks pass on main.
