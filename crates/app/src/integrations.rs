@@ -197,9 +197,14 @@ struct Worker {
 
 impl Worker {
     fn new() -> Self {
-        let last_fm_path = defaults_path(LastFMSettings::default_path(), "woofmusic-last_fm.json");
-        let discord_path = defaults_path(DiscordSettings::default_path(), "woofmusic-discord.json");
-        let odesli_path = defaults_path(OdesliSettings::default_path(), "woofmusic-odesli.json");
+        Self::at(
+            defaults_path(LastFMSettings::default_path(), "woofmusic-last_fm.json"),
+            defaults_path(DiscordSettings::default_path(), "woofmusic-discord.json"),
+            defaults_path(OdesliSettings::default_path(), "woofmusic-odesli.json"),
+        )
+    }
+
+    fn at(last_fm_path: PathBuf, discord_path: PathBuf, odesli_path: PathBuf) -> Self {
         Self {
             last_fm: LastFMIntegration::new(Session::shared(), last_fm_path.clone()),
             last_fm_path,
@@ -279,7 +284,10 @@ impl Worker {
                     .map_err(save_error)
             }
             Action::SetDiscordOptions(options) => {
+                // The on/off switch has its own action; the options on screen may be older.
+                let enabled = self.discord.settings.enabled;
                 self.discord.settings = *options;
+                self.discord.settings.enabled = enabled;
                 // The presence is sent again with the new templates and buttons.
                 self.discord.shown = None;
                 self.discord.last_attempt = None;
@@ -593,4 +601,53 @@ fn millis(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn worker(dir: &Path) -> Worker {
+        Worker::at(
+            dir.join("last_fm.json"),
+            dir.join("discord.json"),
+            dir.join("odesli.json"),
+        )
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-integrations")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn run<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn editing_discord_options_keeps_the_switch_where_it_was_turned() {
+        let dir = scratch("discord-switch");
+        let mut worker = worker(&dir);
+        // Settings still holds the options it loaded, with the switch on.
+        let stale = worker.discord.settings.clone();
+        assert!(stale.enabled);
+        run(worker.apply(Action::SetDiscord(false))).unwrap();
+        let mut edited = stale;
+        edited.details_template = "{song.name}!".into();
+        run(worker.apply(Action::SetDiscordOptions(Box::new(edited)))).unwrap();
+        assert!(!worker.status().discord);
+        assert!(!DiscordSettings::load(&dir.join("discord.json")).enabled);
+        assert_eq!(
+            worker.status().discord_options.details_template,
+            "{song.name}!"
+        );
+    }
 }
