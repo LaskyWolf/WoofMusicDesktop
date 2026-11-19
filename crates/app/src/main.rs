@@ -1107,7 +1107,13 @@ impl App {
                 self.player.starting = false;
                 let video_id = self.player.song().map(|song| song.video_id.clone());
                 self.player.error = match (result, &self.services.player) {
-                    (Err(error), _) => Some(error),
+                    (Err(error), player) => {
+                        // The previous song would go on playing under the new title.
+                        if let Some(player) = player {
+                            player.stop();
+                        }
+                        Some(error)
+                    }
                     (Ok(_), None) => Some("The audio player (libmpv) did not start.".to_owned()),
                     (Ok((url, loudness)), Some(player)) => {
                         if let Some(song) = self.player.queue.song() {
@@ -1317,11 +1323,13 @@ impl App {
             }
             Message::Previous => {
                 if self.player.position > RESTART_AFTER || !self.player.queue.has_previous() {
+                    // A seek ends a running mix first, like `Message::Seek`.
+                    let finished = self.finish_transition();
                     if let Some(player) = &self.services.player {
                         player.seek(0.0);
                     }
                     self.player.position = 0.0;
-                    Task::none()
+                    finished
                 } else {
                     let index = self.player.queue.index - 1;
                     self.player.queue.move_to(index);
@@ -3294,6 +3302,23 @@ mod tests {
         let _ = app.update(Message::Artwork("B".into(), Some(artwork())));
         let _ = app.update(Message::Artwork("A".into(), Some(artwork())));
         assert!(app.current_artwork().is_some());
+    }
+
+    #[test]
+    fn a_failed_resolve_shows_the_error_and_a_stale_one_is_ignored() {
+        let mut app = app();
+        play(&mut app, "A");
+        let stale = app.player.request;
+        play(&mut app, "B");
+        let _ = app.update(Message::Resolved(stale, Err("old".into())));
+        assert!(app.player.starting && app.player.error.is_none());
+        let _ = app.update(Message::Resolved(app.player.request, Err("gone".into())));
+        assert!(!app.player.starting);
+        assert_eq!(app.player.error.as_deref(), Some("gone"));
+        // Previous and Next at the ends of a one-song queue do nothing harmful.
+        let _ = app.update(Message::Previous);
+        let _ = app.update(Message::Next);
+        assert_eq!(app.player.queue.index, 0);
     }
 
     #[test]
