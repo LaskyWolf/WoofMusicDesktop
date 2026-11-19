@@ -404,11 +404,12 @@ impl State {
         .style(settings::pick_style)
         .menu_style(settings::menu_style);
         let bar = row![
+            // The chips take what the sort list leaves; otherwise they push it to nothing.
             iced::widget::Row::with_children(chips)
+                .width(Length::Fill)
                 .spacing(8)
                 .wrap()
                 .vertical_spacing(8),
-            Space::new().width(Length::Fill),
             sort,
         ]
         .spacing(16)
