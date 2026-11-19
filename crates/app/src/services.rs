@@ -801,6 +801,7 @@ impl Services {
         let wanted = name.trim().to_lowercase();
         let sections = self.clone().search(name).await.ok()?;
         let artists: Vec<_> = sections
+            .sections
             .iter()
             .flat_map(|section| &section.items)
             .filter_map(|item| match item {
