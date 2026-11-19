@@ -33,6 +33,23 @@ pub struct Downloads {
     pub confirm: Option<String>,
 }
 
+/// Auto-Download New Episodes saves at most this many per opened podcast.
+const MAX_NEW_EPISODES: usize = 10;
+
+/// The first episodes of an opened podcast that are not saved or downloading.
+fn new_episodes(episodes: &[SongItem], downloads: &Downloads) -> Vec<SongItem> {
+    episodes
+        .iter()
+        .filter(|song| {
+            song.is_available()
+                && !downloads.saved.contains(&song.video_id)
+                && downloads.state(&song.video_id).is_none()
+        })
+        .take(MAX_NEW_EPISODES)
+        .cloned()
+        .collect()
+}
+
 /// `Downloads::confirm` of the Downloads page's Remove All Downloads.
 const ALL: &str = "all";
 
@@ -131,7 +148,15 @@ pub fn song(track: &DownloadedTrackEntity) -> SongItem {
 
 impl App {
     pub(crate) fn update_download(&mut self, message: Msg) -> Task<Message> {
-        let task = self.step_download(message);
+        // The Downloads tab of Settings shows the storage: read it again when it changes.
+        let storage_changed = matches!(
+            message,
+            Msg::Finished(..) | Msg::Deleted(..) | Msg::Removed(_)
+        ) && *self.route() == Route::Settings;
+        let mut task = self.step_download(message);
+        if storage_changed {
+            task = Task::batch([task, self.settings.stats(&self.services)]);
+        }
         self.downloads.batch = self.services.downloads.batch_progress();
         *VIEW
             .write()
@@ -170,6 +195,16 @@ impl App {
     }
 
     pub(crate) fn album_seen(&self, detail: &crate::Detail) -> Task<Message> {
+        if let crate::Detail::Podcast { songs, .. } = detail
+            && self.settings.prefs.auto_download_new_episodes
+        {
+            let new = Arc::new(new_episodes(songs, &self.downloads));
+            return if new.is_empty() {
+                Task::none()
+            } else {
+                Task::done(Message::Download(Msg::StartAll(new)))
+            };
+        }
         let crate::Detail::Album { info, songs } = detail else {
             return Task::none();
         };
@@ -786,4 +821,33 @@ pub mod icons {
     /// A circle with an exclamation mark.
     pub const WARNING: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zm0 4.7a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0v-5a1 1 0 0 0-1-1zm0 9.1a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4z" fill="#fff"/></svg>"##;
     pub const TRASH: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 3.5h4M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12M10 11v6M14 11v6"/></g></svg>"##;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn episode(id: &str) -> SongItem {
+        SongItem {
+            video_id: id.into(),
+            ..SongItem::default()
+        }
+    }
+
+    #[test]
+    fn auto_download_takes_ten_new_episodes_and_skips_saved_and_running_ones() {
+        let episodes: Vec<SongItem> = (0..15).map(|i| episode(&format!("ep{i}"))).collect();
+        let mut downloads = Downloads::default();
+        downloads.saved.insert("ep0".into());
+        downloads.active.push(ActiveDownload {
+            song: episode("ep1"),
+            state: DownloadState::Downloading(0.5),
+        });
+        let ids: Vec<_> = new_episodes(&episodes, &downloads)
+            .into_iter()
+            .map(|song| song.video_id)
+            .collect();
+        assert_eq!(ids.len(), 10);
+        assert_eq!((ids[0].as_str(), ids[9].as_str()), ("ep2", "ep11"));
+    }
 }
