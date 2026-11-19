@@ -13,8 +13,10 @@ use trop::networking::models::home_page::{
     ExploreSection, ExploreSectionKind, HomeSection, MoodItem,
 };
 use trop::networking::models::yt_item::{SongItem, YTItem};
+use trop::playback::episode_playback_store::EpisodePlaybackStore;
 use trop::search::search_parser::SearchSection;
 
+use crate::collections::{self, Caps, Ctx};
 use crate::playlist_edit;
 use crate::services::Library;
 use crate::ui::{self, Covers};
@@ -180,6 +182,7 @@ pub fn album<'a>(
     album: &'a AlbumDetailInfo,
     songs: &Arc<Vec<SongItem>>,
     playing: Option<&str>,
+    cx: Ctx<'a>,
 ) -> Element<'a, Message> {
     let line = [
         ui::artists(&album.artists),
@@ -191,15 +194,32 @@ pub fn album<'a>(
     .filter(|part| !part.is_empty())
     .collect::<Vec<_>>()
     .join(" • ");
-    let mut page = vec![ui::header(
-        covers,
-        album.thumbnail_url.as_deref(),
-        false,
+    let link = collections::share_url(
+        &Route::Album(album.browse_id.clone()),
+        album.playlist_id.as_deref(),
+    );
+    let mut page = vec![ui::header_with(
+        ui::cover(covers, album.thumbnail_url.as_deref(), 220.0, 14.0),
         &album.title,
         vec![line],
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+        Some(collections::actions(
+            cx,
+            songs,
+            link,
+            ("Save", "Saved"),
+            true,
+            true,
+        )),
     )];
-    page.push(tracks(covers, songs, false, playing));
+    page.extend(selectable(
+        covers,
+        songs,
+        true,
+        playing,
+        cx,
+        Caps::default(),
+    ));
     ui::scroll_page(page)
 }
 
@@ -210,6 +230,7 @@ pub fn playlist<'a>(
     playing: Option<&str>,
     edit: &'a playlist_edit::State,
     in_library: bool,
+    cx: Ctx<'a>,
 ) -> Element<'a, Message> {
     let line = [
         playlist.author_name.clone().unwrap_or_default(),
@@ -225,20 +246,31 @@ pub fn playlist<'a>(
         .as_deref()
         .map(|d| ui::fit(d.lines().next().unwrap_or_default(), 560.0, 14.0))
         .unwrap_or_default();
-    let mut page = vec![ui::header(
-        covers,
-        playlist.thumbnail_url.as_deref(),
-        false,
+    let link = collections::share_url(&Route::Playlist(playlist.playlist_id.clone()), None);
+    // No cover of its own: the first four song covers.
+    let art = match playlist.thumbnail_url {
+        Some(_) => ui::cover(covers, playlist.thumbnail_url.as_deref(), 220.0, 14.0),
+        None => collections::mosaic(covers, songs, 220.0),
+    };
+    let mut page = vec![ui::header_with(
+        art,
         &playlist.title,
         vec![line, description],
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+        Some(collections::actions(cx, songs, link, ("", ""), true, true)),
     )];
     page.push(playlist_edit::actions(covers, edit, playlist, in_library));
-    page.push(if edit.editing(&playlist.playlist_id) {
-        playlist_edit::edit_tracks(covers, edit, playlist, songs, playing)
+    if edit.editing(&playlist.playlist_id) {
+        page.push(playlist_edit::edit_tracks(
+            covers, edit, playlist, songs, playing,
+        ));
     } else {
-        tracks(covers, songs, true, playing)
-    });
+        let caps = Caps {
+            remove: playlist.is_editable,
+            delete: false,
+        };
+        page.extend(selectable(covers, songs, true, playing, cx, caps));
+    }
     ui::scroll_page(page)
 }
 
@@ -248,11 +280,11 @@ pub fn artist<'a>(
     songs: &Arc<Vec<SongItem>>,
     related: &'a [YTItem],
     playing: Option<&str>,
+    cx: Ctx<'a>,
 ) -> Element<'a, Message> {
-    let mut page = vec![ui::header(
-        covers,
-        artist.thumbnail_url.as_deref(),
-        true,
+    let link = collections::share_url(&Route::Artist(artist.browse_id.clone()), None);
+    let mut page = vec![ui::header_with(
+        ui::cover(covers, artist.thumbnail_url.as_deref(), 220.0, 110.0),
         &artist.name,
         vec![
             artist
@@ -262,6 +294,14 @@ pub fn artist<'a>(
                 .unwrap_or_default(),
         ],
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+        Some(collections::actions(
+            cx,
+            songs,
+            link,
+            ("Subscribe", "Subscribed"),
+            true,
+            false,
+        )),
     )];
     if !songs.is_empty() {
         page.push(
@@ -296,28 +336,36 @@ pub fn podcast<'a>(
     podcast: &'a PodcastDetailInfo,
     songs: &Arc<Vec<SongItem>>,
     playing: Option<&str>,
+    cx: Ctx<'a>,
+    positions: &EpisodePlaybackStore,
 ) -> Element<'a, Message> {
-    let mut page = vec![ui::header(
-        covers,
-        podcast.thumbnail_url.as_deref(),
-        false,
+    let link = collections::share_url(&Route::Podcast(podcast.browse_id.clone()), None);
+    let mut page = vec![ui::header_with(
+        ui::cover(covers, podcast.thumbnail_url.as_deref(), 220.0, 14.0),
         &podcast.title,
         vec![
             podcast.author.clone().unwrap_or_default(),
             count(podcast.episodes.len() as i64, "episode"),
         ],
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
+        Some(collections::actions(
+            cx,
+            songs,
+            link,
+            ("Subscribe", "Subscribed"),
+            false,
+            false,
+        )),
     )];
+    if let Some((index, saved)) = collections::latest_in_progress(&podcast.episodes, positions) {
+        page.push(collections::resume_card(covers, songs, index, saved));
+    }
     if let Some(about) = podcast
         .description_text
         .as_deref()
         .filter(|d| !d.is_empty())
     {
-        page.push(
-            container(text(about).size(14).color(theme::SECONDARY))
-                .max_width(720)
-                .into(),
-        );
+        page.push(collections::description(cx.state, about));
     }
     // `songs` holds the episodes in the same order (`Detail::podcast`).
     let rows = podcast.episodes.iter().enumerate().map(|(index, episode)| {
@@ -330,7 +378,17 @@ pub fn podcast<'a>(
         .collect::<Vec<_>>()
         .join(" • ");
         let is_playing = playing == Some(episode.video_id.as_str());
-        ui::track_row(covers, songs, index, true, is_playing, subtitle, None)
+        let track = ui::track_row(covers, songs, index, true, is_playing, subtitle, None);
+        match collections::episode_tag(positions.position(&episode.video_id), is_playing) {
+            Some(label) => row![
+                container(track).width(Length::Fill),
+                collections::tag(label)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+            None => track,
+        }
     });
     page.push(column(rows).spacing(2).into());
     ui::scroll_page(page)
@@ -392,6 +450,25 @@ fn tracks<'a>(
     }))
     .spacing(2)
     .into()
+}
+
+/// The song list; in select mode a bar of bulk actions and rows that tick.
+fn selectable<'a>(
+    covers: &'a Covers,
+    songs: &Arc<Vec<SongItem>>,
+    show_cover: bool,
+    playing: Option<&str>,
+    cx: Ctx<'a>,
+    caps: Caps,
+) -> Vec<Element<'a, Message>> {
+    if cx.state.selecting {
+        vec![
+            collections::bulk_bar(cx, songs.len(), caps),
+            collections::pick_rows(covers, songs, cx.state),
+        ]
+    } else {
+        vec![tracks(covers, songs, show_cover, playing)]
+    }
 }
 
 /// Swift `ArtistDetailView.subscriberLabel`: "63.5M" becomes "63.5M subscribers".
@@ -764,6 +841,7 @@ pub fn history<'a>(
     covers: &'a Covers,
     feeds: &'a crate::feeds::Feeds,
     playing: Option<&str>,
+    cx: Ctx<'a>,
 ) -> Element<'a, Message> {
     use crate::downloads::{hint, icon_button, icons};
     use crate::feeds::Msg;
@@ -777,6 +855,7 @@ pub fn history<'a>(
         page_title("History"),
         container(field).max_width(640).into(),
     ];
+    let selecting = cx.state.selecting;
     let history = &feeds.history;
     let days = history.filtered(&feeds.query);
     if history.is_loading {
@@ -802,16 +881,42 @@ pub fn history<'a>(
             .flat_map(|day| day.rows.iter().map(|row| row.song.clone()))
             .collect(),
     );
+    if !songs.is_empty() {
+        page.push(
+            iced::widget::row![ui::pill_button(
+                if selecting { "Done" } else { "Select" },
+                Message::Pages(collections::Msg::Select(!selecting)),
+            )]
+            .into(),
+        );
+    }
+    if selecting {
+        let caps = Caps {
+            remove: false,
+            delete: true,
+        };
+        page.push(collections::bulk_bar(cx, songs.len(), caps));
+    }
     let mut index = 0;
     for day in &days {
         let rows = day.rows.iter().map(|row| {
+            if selecting {
+                let pick = collections::pick_row(
+                    covers,
+                    &row.song,
+                    index,
+                    cx.state.picked.contains(&index),
+                );
+                index += 1;
+                return pick;
+            }
             let is_playing = playing == Some(row.song.video_id.as_str());
             let subtitle = ui::artists(&row.song.artists);
             let track = ui::track_row(covers, &songs, index, true, is_playing, subtitle, None);
             index += 1;
             let delete: Element<'a, Message> = match row.event.as_ref().and_then(|e| e.id) {
                 Some(id) => hint(
-                    icon_button(icons::TRASH, Message::Feeds(Msg::Delete(id))),
+                    icon_button(icons::TRASH, Message::Feeds(Msg::Delete(vec![id]))),
                     "Delete from History".to_owned(),
                 ),
                 // From YouTube Music only: nothing here to delete.

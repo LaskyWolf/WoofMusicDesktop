@@ -41,7 +41,7 @@ pub enum Msg {
     /// The next page of older plays from this app.
     More,
     /// Removes a play from this app's history.
-    Delete(i64),
+    Delete(Vec<i64>),
     ActivityLoaded(u64, Option<Vec<ActivityItem>>),
     /// Opens a release's album and marks it seen.
     Open(String, String),
@@ -201,10 +201,10 @@ impl Feeds {
                 Some(_) => self.read_local(services),
                 None => Task::none(),
             },
-            Msg::Delete(id) => {
+            Msg::Delete(ids) => {
                 let db = services.db.clone();
                 let delete = Task::future(tokio::task::spawn_blocking(move || {
-                    if let Err(error) = HistoryViewModel::delete_events(&db, &[id]) {
+                    if let Err(error) = HistoryViewModel::delete_events(&db, &ids) {
                         eprintln!("Could not delete the play: {error}");
                     }
                 }))

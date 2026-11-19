@@ -24,10 +24,10 @@ use trop::services::personalization_service::{RadioOptions, RadioStyle};
 use crate::{Message, Route, theme, ui};
 
 const WIDTH: f32 = 232.0;
-const ITEM: f32 = 36.0;
-const PAD: f32 = 6.0;
+pub(crate) const ITEM: f32 = 36.0;
+pub(crate) const PAD: f32 = 6.0;
 /// The glass shader's id for the menu panel (1–3 are the sidebar, player bar and queue).
-const GLASS: u64 = 4;
+pub(crate) const GLASS: u64 = 4;
 
 /// An open menu.
 pub struct Menu {
@@ -391,6 +391,15 @@ fn checked<'a>(label: &str, action: Action, on: bool) -> Element<'a, Message> {
 }
 
 fn item<'a>(icon: &'static [u8], label: &str, action: Action) -> Element<'a, Message> {
+    row_button(icon, label, Message::MenuAction(action))
+}
+
+/// A menu row that sends `message`.
+pub(crate) fn row_button<'a>(
+    icon: &'static [u8],
+    label: &str,
+    message: Message,
+) -> Element<'a, Message> {
     let content = row![
         ui::icon(icon, 18.0).style(|_, _| svg::Style {
             color: Some(theme::SECONDARY)
@@ -405,7 +414,7 @@ fn item<'a>(icon: &'static [u8], label: &str, action: Action) -> Element<'a, Mes
     button(container(content).center_y(ITEM).padding([0, 10]))
         .width(Length::Fill)
         .padding(0)
-        .on_press(Message::MenuAction(action))
+        .on_press(message)
         .style(|_, status| button::Style {
             background: matches!(status, button::Status::Hovered | button::Status::Pressed)
                 .then_some(Background::Color(theme::PRESSED)),
@@ -416,7 +425,7 @@ fn item<'a>(icon: &'static [u8], label: &str, action: Action) -> Element<'a, Mes
         .into()
 }
 
-fn note<'a>(label: &'a str) -> Element<'a, Message> {
+pub(crate) fn note<'a>(label: &'a str) -> Element<'a, Message> {
     container(text(label).size(14).color(theme::SECONDARY))
         .center_y(ITEM)
         .padding([0, 10])

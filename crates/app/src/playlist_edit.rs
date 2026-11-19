@@ -870,7 +870,7 @@ pub fn edit_tracks<'a>(
 
 /// A pill like `ui::pill_button`, with an optional icon, a selected look and
 /// a dimmed look while it does nothing.
-fn pill<'a>(
+pub(crate) fn pill<'a>(
     label: &str,
     glyph: Option<&'static [u8]>,
     message: Option<Message>,

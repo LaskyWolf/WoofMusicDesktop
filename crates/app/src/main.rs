@@ -3,6 +3,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod backdrop;
+mod collections;
 mod comments;
 mod downloads;
 mod equalizer;
@@ -362,6 +363,7 @@ struct App {
     /// The queue as last written to `queue.json` (Persist Queue).
     saved_queue: SavedQueue,
     playlist_edit: playlist_edit::State,
+    collections: collections::State,
     /// The lyrics options, karaoke greeting and share card.
     lyrics_extras: lyrics::State,
 }
@@ -493,6 +495,7 @@ pub enum Message {
     Download(downloads::Msg),
     /// Creating, renaming, deleting and editing playlists.
     PlaylistEdit(playlist_edit::Msg),
+    Pages(collections::Msg),
     /// The Settings page and the player bar's Copy song link.
     Settings(settings::Message),
     /// The lyrics options menu, karaoke and the share card.
@@ -615,6 +618,7 @@ impl App {
                 .map(|path| EpisodePlaybackStore::load(&path))
                 .unwrap_or_default(),
             playlist_edit: playlist_edit::State::default(),
+            collections: collections::State::default(),
             lyrics_extras: lyrics::State::new(&services),
             settings,
         };
@@ -1008,6 +1012,7 @@ impl App {
             }
             Message::Download(message) => self.update_download(message),
             Message::PlaylistEdit(message) => self.update_playlist_edit(message),
+            Message::Pages(message) => self.update_collections(message),
             Message::Account(result) => {
                 if !matches!(self.session, Session::SignedIn(_)) {
                     return Task::none();
@@ -1541,6 +1546,7 @@ impl App {
 
     /// Starts loading what the page on screen needs, unless it is loaded or loading.
     fn enter(&mut self) -> Task<Message> {
+        self.collections.reset();
         self.feeds.entered(&self.route().clone());
         match self.route().clone() {
             Route::Home => {
@@ -2468,6 +2474,9 @@ impl App {
             };
             layers = layers.push(song_menu::view(menu, context));
         }
+        if let Some(card) = collections::overlay(&self.collections, self.window) {
+            layers = layers.push(card);
+        }
         if let Some(composer) = self
             .lyrics_extras
             .overlay()
@@ -2506,6 +2515,12 @@ impl App {
     fn page(&self) -> Element<'_, Message> {
         let covers = &self.covers;
         let playing = self.player.song().map(|song| song.video_id.as_str());
+        let account = matches!(self.session, Session::SignedIn(_));
+        let cx = |saved| collections::Ctx {
+            state: &self.collections,
+            saved,
+            account,
+        };
         match self.route() {
             Route::Home => pages::home(
                 covers,
@@ -2540,7 +2555,7 @@ impl App {
                 &self.session,
             ),
             Route::Equalizer => equalizer::view(&self.defaults),
-            Route::History => pages::history(covers, &self.feeds, playing),
+            Route::History => pages::history(covers, &self.feeds, playing, cx(None)),
             Route::Profile => self.profile.view(
                 covers,
                 &self.session,
@@ -2563,12 +2578,16 @@ impl App {
             },
             route => match route.key().and_then(|key| self.details.get(&key)) {
                 Some(Load::Loaded(detail)) => match detail.as_ref() {
-                    Detail::Album { info, songs } => pages::album(covers, info, songs, playing),
+                    Detail::Album { info, songs } => {
+                        pages::album(covers, info, songs, playing, cx(self.saved(route)))
+                    }
                     Detail::Artist {
                         info,
                         songs,
                         shelves,
-                    } => pages::artist(covers, info, songs, shelves, playing),
+                    } => {
+                        pages::artist(covers, info, songs, shelves, playing, cx(self.saved(route)))
+                    }
                     Detail::Playlist { info, songs } => {
                         let in_library = matches!(&self.library, Some(Load::Loaded(library))
                             if library.playlists.iter().any(|(item, _)| item.id() == info.playlist_id));
@@ -2579,9 +2598,17 @@ impl App {
                             playing,
                             &self.playlist_edit,
                             in_library,
+                            cx(None),
                         )
                     }
-                    Detail::Podcast { info, songs } => pages::podcast(covers, info, songs, playing),
+                    Detail::Podcast { info, songs } => pages::podcast(
+                        covers,
+                        info,
+                        songs,
+                        playing,
+                        cx(self.saved(route)),
+                        &self.episodes,
+                    ),
                     Detail::Mood(sections) => pages::explore(covers, sections, playing),
                     Detail::Songs(songs) if *route == Route::Downloads => {
                         downloads::page(covers, songs, &self.downloads, playing)
@@ -3332,6 +3359,7 @@ mod tests {
             together: together::Room::default(),
             comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
+            collections: collections::State::default(),
         }
     }
 

@@ -119,10 +119,10 @@ Home and Search [main]
 - [x] Several accounts with a library each (`ProfileView`, `ProfileStorage`)
 
 Pages and cards [worker: pages]
-- [ ] Detail pages: Shuffle, Save album to library, Subscribe to artist and podcast, Share and copy link, Add page to queue (`PlaylistActionsMenu`)
-- [ ] Right-click menus on album, playlist and artist cards (`CardContextMenu`)
-- [ ] Multi-select with bulk actions on album, playlist and History pages (`BulkSongActions`)
-- [ ] 2x2 cover mosaic for playlists without a cover (`ArtworkMosaicView`); podcast resume card, episode status tags, expandable description (`PodcastDetailView`)
+- [x] Detail pages: Shuffle, Save album to library, Subscribe to artist and podcast, Share and copy link, Add page to queue (`PlaylistActionsMenu`)
+- [x] Right-click menus on album, playlist and artist cards (`CardContextMenu`)
+- [x] Multi-select with bulk actions on album, playlist and History pages (`BulkSongActions`)
+- [x] 2x2 cover mosaic for playlists without a cover (`ArtworkMosaicView`); podcast resume card, episode status tags, expandable description (`PodcastDetailView`)
 
 Downloads and song menu [worker: downloads]
 - [ ] Download a whole album or playlist with a progress card; downloaded badges (`DownloadManager` batches, `LibraryDownloadCard`, `DownloadedCollections`)

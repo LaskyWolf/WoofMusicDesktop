@@ -7748,6 +7748,7 @@ dependencies = [
  "dirs",
  "discord-rich-presence",
  "env_logger",
+ "fastrand",
  "iced",
  "image",
  "jiff",

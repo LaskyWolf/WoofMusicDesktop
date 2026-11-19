@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+fastrand = "2"
 iced = { version = "0.14", features = ["wgpu", "tokio", "image", "svg", "advanced", "canvas"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }

@@ -275,6 +275,9 @@ pub fn track_row<'a>(
 fn song_menu<'a>(item: &YTItem, element: Element<'a, Message>) -> Element<'a, Message> {
     match item {
         YTItem::Song(song) => crate::song_menu::on_right_click(element, song, None),
+        YTItem::Album(_) | YTItem::Playlist(_) | YTItem::Artist(_) => {
+            crate::collections::on_right_click(element, item)
+        }
         _ => element,
     }
 }
@@ -288,7 +291,25 @@ pub fn header<'a>(
     lines: Vec<String>,
     play: Option<Message>,
 ) -> Element<'a, Message> {
-    const SIZE: f32 = 220.0;
+    let art = cover(
+        covers,
+        thumbnail,
+        HEADER_COVER,
+        if round { HEADER_COVER / 2.0 } else { 14.0 },
+    );
+    header_with(art, title, lines, play, None)
+}
+
+const HEADER_COVER: f32 = 220.0;
+
+/// `header` with its own cover element and a row of action pills under Play.
+pub fn header_with<'a>(
+    art: Element<'a, Message>,
+    title: &'a str,
+    lines: Vec<String>,
+    play: Option<Message>,
+    actions: Option<Element<'a, Message>>,
+) -> Element<'a, Message> {
     let mut info = column![text(title).size(34).font(theme::weight(Weight::Bold))].spacing(6);
     for line in lines.into_iter().filter(|line| !line.is_empty()) {
         info = info.push(text(line).size(14).color(theme::SECONDARY));
@@ -300,18 +321,13 @@ pub fn header<'a>(
             Some(play),
         ));
     }
-    row![
-        cover(
-            covers,
-            thumbnail,
-            SIZE,
-            if round { SIZE / 2.0 } else { 14.0 }
-        ),
-        info,
-    ]
-    .spacing(28)
-    .align_y(Alignment::End)
-    .into()
+    if let Some(actions) = actions {
+        info = info.push(actions);
+    }
+    row![art, info.width(Length::Fill)]
+        .spacing(28)
+        .align_y(Alignment::End)
+        .into()
 }
 
 /// The cover once downloaded, a dark square until then.
