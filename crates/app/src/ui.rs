@@ -651,7 +651,8 @@ pub fn format_bytes(bytes: u64) -> String {
     }
     let mut value = bytes as f64 / 1000.0;
     let mut unit = 0;
-    while value >= 1000.0 && unit < UNITS.len() - 1 {
+    // 999.96 prints as 1000.0: that is already the next unit.
+    while value >= 999.95 && unit < UNITS.len() - 1 {
         value /= 1000.0;
         unit += 1;
     }
@@ -668,5 +669,11 @@ mod format_bytes_tests {
         assert_eq!(format_bytes(999), "999 bytes");
         assert_eq!(format_bytes(12_500_000), "12.5 MB");
         assert_eq!(format_bytes(3_200_000_000), "3.2 GB");
+    }
+
+    #[test]
+    fn a_size_that_rounds_up_to_1000_moves_to_the_next_unit() {
+        assert_eq!(format_bytes(999_999), "1.0 MB");
+        assert_eq!(format_bytes(999_950_000), "1.0 GB");
     }
 }
