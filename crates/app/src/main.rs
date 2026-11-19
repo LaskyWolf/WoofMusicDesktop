@@ -11,15 +11,19 @@ mod feeds;
 mod glass;
 mod integrations;
 mod login;
+mod looks;
 mod lyrics;
+mod marquee;
 mod media_controls;
 mod now_playing;
 mod pages;
 mod playlist_edit;
+mod problems;
 mod profile;
 mod services;
 mod settings;
 mod share_card;
+mod skip_glyph;
 mod song_menu;
 mod theme;
 mod title_bar;
@@ -83,7 +87,7 @@ pub fn main() -> iced::Result {
         _ => {}
     }
     // RUST_LOG=info shows the player's and the crossfade's log.
-    env_logger::init();
+    problems::init();
     iced::application(App::new, App::update, App::view)
         .title("WoofMusic")
         .subscription(App::subscription)
@@ -356,6 +360,8 @@ struct App {
     defaults: PlayerDefaults,
     speed: PlaybackSpeed,
     sleep: SleepTimer,
+    skip: skip_glyph::Skip,
+    looks: looks::Looks,
     /// The playing song's non-music parts.
     sponsor: SponsorBlock,
     /// Where podcast episodes and long videos stopped.
@@ -464,6 +470,12 @@ pub enum Message {
     RetryLyrics,
     /// A lyric line was clicked: the song jumps to where it starts.
     SeekTo(f64),
+    SkipFrame(std::time::Instant),
+    /// Opens or closes the full-screen cover.
+    FullscreenCover(bool),
+    LooksFrame(std::time::Instant),
+    /// Right-click on a lyric line.
+    CopyLine(String),
     QueueScrolled(scrollable::Viewport),
     /// The grip of this queue song was pressed.
     QueueDrag(usize),
@@ -612,6 +624,8 @@ impl App {
                 .unwrap_or_default(),
             speed: PlaybackSpeed::default(),
             sleep: SleepTimer::default(),
+            skip: skip_glyph::Skip::default(),
+            looks: looks::Looks::default(),
             sponsor: SponsorBlock::default(),
             saved_queue: SavedQueue::default(),
             episodes: EpisodePlaybackStore::default_path()
@@ -633,6 +647,13 @@ impl App {
         app.player.queue.is_repeat_on = app.defaults.repeat;
         // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
         app.comments.open = std::env::var("WOOF_COMMENTS").is_ok();
+        // Dev aid: WOOF_LOOK=cover|bloom|sleep starts that player look.
+        match std::env::var("WOOF_LOOK").as_deref() {
+            Ok("cover") => app.looks.open_cover(),
+            Ok("bloom") => app.looks.bloom_start(Instant::now()),
+            Ok("sleep") => app.looks.slept(Instant::now(), "Sweet dreams"),
+            _ => {}
+        }
         app.speed.podcast_rate = app.defaults.podcast_speed;
         if let Some(player) = &services.player {
             player.set_volume(app.defaults.volume);
@@ -1252,7 +1273,23 @@ impl App {
                 self.read_player();
                 finished
             }
-            Message::Next => self.next(),
+            Message::Next => {
+                self.skip.start(false);
+                self.next()
+            }
+            Message::FullscreenCover(open) => {
+                if open {
+                    self.looks.open_cover();
+                } else {
+                    self.looks.cover = None;
+                }
+                Task::none()
+            }
+            Message::LooksFrame(_) => Task::none(),
+            Message::SkipFrame(now) => {
+                self.skip.frame(now);
+                Task::none()
+            }
             Message::Seeking(position) => {
                 self.player.seeking = Some(position);
                 Task::none()
@@ -1346,6 +1383,7 @@ impl App {
                 Task::none()
             }
             Message::RetryLyrics => self.fetch_lyrics(),
+            Message::CopyLine(line) => iced::clipboard::write(line),
             Message::SeekTo(position) => {
                 self.player.seeking = Some(position);
                 self.update(Message::Seek)
@@ -1376,7 +1414,9 @@ impl App {
                 Task::none()
             }
             Message::Dismiss => {
-                if self.studio.is_some() {
+                if self.looks.cover.take().is_some() {
+                    Task::none()
+                } else if self.studio.is_some() {
                     self.update(Message::Studio(share_card::Msg::Back))
                 } else if self.together.open {
                     self.together.open = false;
@@ -1402,6 +1442,7 @@ impl App {
                 }
             }
             Message::Previous => {
+                self.skip.start(true);
                 if self.player.position > RESTART_AFTER || !self.player.queue.has_previous() {
                     // A seek ends a running mix first, like `Message::Seek`.
                     let finished = self.finish_transition();
@@ -1884,6 +1925,7 @@ impl App {
             self.player.queue.set(std::slice::from_ref(&song), 0);
             self.start()
         };
+        self.looks.bloom_start(Instant::now());
         let radio = Task::perform(
             self.services.clone().radio(video_id.clone(), options),
             move |result| Message::Radio(video_id, result),
@@ -1906,6 +1948,7 @@ impl App {
         };
         let Ok((mut songs, _)) = result.inspect_err(|error| log::warn!("Radio failed: {error}"))
         else {
+            self.looks.bloom_loaded(Instant::now(), &[], 0);
             return self.notify("The radio did not load.");
         };
         // The queue must stay on the song that plays.
@@ -1917,6 +1960,8 @@ impl App {
             }
         };
         let added = songs.len().saturating_sub(index + 1);
+        self.looks
+            .bloom_loaded(Instant::now(), &songs[index + 1..], added);
         self.player.queue.replace_with_radio(&songs, index);
         self.notify(&format!("Radio: {added} songs up next"))
     }
@@ -1943,6 +1988,7 @@ impl App {
         }
         self.read_player();
         let message = self.sleep.finish_message();
+        self.looks.slept(Instant::now(), message);
         Task::batch([finished, self.notify(message)])
     }
 
@@ -2365,6 +2411,8 @@ impl App {
         }
         subscriptions.push(self.lyrics_extras.subscription(self.showing_lyrics()));
         subscriptions.push(self.profile.subscription());
+        subscriptions.push(self.skip.subscription());
+        subscriptions.push(self.looks.subscription(self.sleep.left(Instant::now())));
         if let Some(studio) = &self.studio {
             subscriptions.push(studio.subscription());
         }
@@ -2455,6 +2503,31 @@ impl App {
             ))
             .width(Length::Fill)
             .height(Length::Fill);
+        if now_playing.is_some()
+            && let Some(sky) = self.looks.overlay(
+                Instant::now(),
+                &looks::Scene {
+                    window: self.window,
+                    queue_open: self.queue_open,
+                    lyrics_open: self.lyrics_open,
+                    covers: &self.covers,
+                    sleep_left: self.sleep.left(Instant::now()),
+                },
+            )
+        {
+            layers = layers.push(sky);
+        }
+        if let (Some(angle), Some(song)) = (self.looks.cover, now_playing) {
+            layers = layers.push(looks::fullscreen_cover(
+                angle,
+                self.current_artwork(),
+                song,
+                self.settings.prefs.player_background_style,
+                &self.covers,
+                self.player.state == PlayState::Playing,
+                self.window,
+            ));
+        }
         if let Some((_, notice)) = &self.notice {
             layers = layers.push(notice_view(notice));
         }
@@ -2632,10 +2705,14 @@ impl App {
                     8.0
                 ),
                 column![
-                    text(ui::fit(&song.title, ui::SONG_TEXT, 14.0))
-                        .size(14)
-                        .font(theme::weight(Weight::Medium))
-                        .wrapping(text::Wrapping::None),
+                    marquee::marquee(
+                        &song.title,
+                        14.0,
+                        ui::SONG_TEXT,
+                        theme::weight(Weight::Medium),
+                        theme::TEXT,
+                        false,
+                    ),
                     text(match (&player.error, player.starting) {
                         (Some(error), _) => ui::fit(error, ui::SONG_TEXT, 13.0),
                         (None, true) => "Loading…".to_owned(),
@@ -2705,15 +2782,17 @@ impl App {
                 Message::Shuffle,
                 player.queue.is_shuffle_on
             ),
-            transport_button(icons::PREVIOUS, 22.0, has_song.then_some(Message::Previous)),
+            transport_content(
+                self.skip.glyph(true, 22.0, has_song),
+                has_song.then_some(Message::Previous)
+            ),
             transport_button(
                 if playing { icons::PAUSE } else { icons::PLAY },
                 30.0,
                 has_song.then_some(Message::TogglePlay),
             ),
-            transport_button(
-                icons::NEXT,
-                22.0,
+            transport_content(
+                self.skip.glyph(false, 22.0, player.has_next()),
                 player.has_next().then_some(Message::Next)
             ),
             toggle(
@@ -3133,7 +3212,15 @@ fn transport_button<'a>(
 ) -> button::Button<'a, Message> {
     // The SVG tint ignores alpha, so a disabled glyph fades with `opacity`.
     let opacity = if message.is_some() { 1.0_f32 } else { 0.3 };
-    button(ui::icon(glyph, size).opacity(opacity))
+    transport_content(ui::icon(glyph, size).opacity(opacity).into(), message)
+}
+
+/// `transport_button` around any glyph.
+fn transport_content<'a>(
+    glyph: Element<'a, Message>,
+    message: Option<Message>,
+) -> button::Button<'a, Message> {
+    button(glyph)
         .padding(6)
         .on_press_maybe(message)
         .style(|_, status| button::Style {
@@ -3283,8 +3370,6 @@ fn save_png(path: &str, shot: &window::Screenshot) -> Result<(), Box<dyn std::er
 mod icons {
     pub const PLAY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 4.8v14.4a1 1 0 0 0 1.5.86l11.6-7.2a1 1 0 0 0 0-1.72L8.5 3.94A1 1 0 0 0 7 4.8z" fill="#fff"/></svg>"##;
     pub const PAUSE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1.2" fill="#fff"/><rect x="14" y="4.5" width="4" height="15" rx="1.2" fill="#fff"/></svg>"##;
-    pub const NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4L4.2 5.5a.8.8 0 0 0-1.2.7zM12 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4l-8.6-5.8a.8.8 0 0 0-1.2.7z" fill="#fff"/></svg>"##;
-    pub const PREVIOUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7zM12 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7z" fill="#fff"/></svg>"##;
     /// A speech bubble with two lines of text.
     /// `quote.bubble`: the lyrics, apart from the comments' text bubble.
     pub const LYRICS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 4.5c4.7 0 8.5 3 8.5 6.8s-3.8 6.8-8.5 6.8c-.9 0-1.8-.1-2.6-.3l-3.9 2.2a.5.5 0 0 1-.7-.6l.8-3.1C4 15 3.5 13.2 3.5 11.3 3.5 7.5 7.3 4.5 12 4.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8.6 9.4h2.2v2.2c0 1-.5 1.8-1.5 2.2M13.2 9.4h2.2v2.2c0 1-.5 1.8-1.5 2.2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
@@ -3349,6 +3434,8 @@ mod tests {
             defaults: PlayerDefaults::default(),
             speed: PlaybackSpeed::default(),
             sleep: SleepTimer::default(),
+            skip: skip_glyph::Skip::default(),
+            looks: looks::Looks::default(),
             sponsor: SponsorBlock::default(),
             episodes: EpisodePlaybackStore::default(),
             saved_queue: SavedQueue::default(),

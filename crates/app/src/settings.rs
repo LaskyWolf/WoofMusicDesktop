@@ -13,10 +13,13 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Length, Task};
 use trop::audio::crossfade::TransitionSettings;
 use trop::audio::lyrics::lyrics_manager::LyricsProviderRegistry;
+use trop::discord::discord_defaults::DiscordSettings;
+use trop::discord::discord_template_renderer::DiscordTemplateRenderer;
+use trop::last_fm::last_fm_defaults::LastFMSettings;
 use trop::odesli::odesli_defaults::OdesliDefaults;
 use trop::settings::settings_store::{
     AUDIO_QUALITIES, COUNTRIES, DEFAULT_TABS, LibraryLayout, LyricsAlignment,
-    PlayerBackgroundStyle, SettingsStore,
+    PlayerBackgroundStyle, QuickPicksSize, SettingsStore,
 };
 
 use crate::integrations::{self, Action, Status};
@@ -65,6 +68,8 @@ pub struct State {
     odesli_error: Option<String>,
     /// The song whose link was copied: its button shows a check.
     copied: Option<String>,
+    /// Warnings and errors of the log, read when Diagnostics opens.
+    problems: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +82,12 @@ pub enum Message {
     Loaded(Result<Status, String>),
     /// A switch: `SetDiscord`, `SetScrobbling` or `SetShareLinks`.
     Set(Action),
+    /// Last.fm and Discord options: shown at once, saved by the integrations thread.
+    LastFmOptions(Box<LastFMSettings>),
+    DiscordOptions(Box<DiscordSettings>),
+    /// Diagnostics: forget the problems logged so far.
+    ClearProblems,
+    ShowLog,
     Saved(Result<Status, String>),
     LastFmConnect,
     LastFmDone(Result<Status, String>),
@@ -185,6 +196,11 @@ impl State {
             odesli_connecting: false,
             odesli_error: None,
             copied: None,
+            problems: if tab == Tab::Diagnostics {
+                crate::problems::recent()
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -233,6 +249,9 @@ impl State {
         match message {
             Message::Tab(tab) => {
                 self.tab = tab;
+                if tab == Tab::Diagnostics {
+                    self.problems = crate::problems::recent();
+                }
                 self.report_copied = false;
                 Task::none()
             }
@@ -264,7 +283,37 @@ impl State {
                 }
                 ask(action, Message::Saved)
             }
-            Message::Saved(Ok(status)) => {
+            Message::LastFmOptions(options) => {
+                if let Some(status) = &mut self.status {
+                    status.last_fm_options = (*options).clone();
+                }
+                ask(Action::SetLastFmOptions(options), Message::Saved)
+            }
+            Message::DiscordOptions(options) => {
+                if let Some(status) = &mut self.status {
+                    status.discord_options = (*options).clone();
+                }
+                ask(Action::SetDiscordOptions(options), Message::Saved)
+            }
+            Message::ClearProblems => {
+                crate::problems::clear();
+                self.problems.clear();
+                Task::none()
+            }
+            Message::ShowLog => {
+                if let Some(folder) =
+                    crate::problems::log_path().and_then(|p| p.parent().map(ToOwned::to_owned))
+                {
+                    let _ = integrations::open_in_browser(&folder.to_string_lossy());
+                }
+                Task::none()
+            }
+            Message::Saved(Ok(mut status)) => {
+                // What was typed since the request went out stays.
+                if let Some(old) = &self.status {
+                    status.last_fm_options = old.last_fm_options.clone();
+                    status.discord_options = old.discord_options.clone();
+                }
                 self.status = Some(status);
                 self.error = None;
                 Task::none()
@@ -629,6 +678,16 @@ impl State {
                     toggle_row("Show Quick Picks", prefs.show_quick_picks, |p, on| {
                         p.show_quick_picks = on
                     }),
+                    plain(
+                        "Quick Picks Size",
+                        segmented(QuickPicksSize::ALL.map(|size| {
+                            (
+                                size.label(),
+                                prefs.quick_picks_size == size,
+                                self.set(|p| p.quick_picks_size = size),
+                            )
+                        })),
+                    ),
                 ]),
             ),
             (
@@ -731,7 +790,14 @@ impl State {
                 self.odesli_key(status),
                 listen_together(),
             ]),
+            Space::new().height(32),
+            self.discord_options(status),
         ];
+        if status.last_fm_user.is_some() {
+            page = page
+                .push(Space::new().height(32))
+                .push(self.last_fm_options(status));
+        }
         if let Some(error) = &self.error {
             page = page.push(Space::new().height(10)).push(error_text(error));
         }
@@ -776,14 +842,216 @@ impl State {
                 text_report.join("\n"),
             ))),
         );
+        let problems: Element<'_, crate::Message> = if self.problems.is_empty() {
+            group(vec![plain("No problems logged", Space::new().into())])
+        } else {
+            group(
+                self.problems
+                    .iter()
+                    .map(|line| {
+                        container(
+                            text(line.as_str())
+                                .size(12)
+                                .font(iced::Font::MONOSPACE)
+                                .color(theme::SECONDARY),
+                        )
+                        .padding([10, 18])
+                        .width(Length::Fill)
+                        .into()
+                    })
+                    .collect(),
+            )
+        };
+        let actions = row![
+            quiet_button("Clear", Some(Message::ClearProblems)),
+            quiet_button("Show Log File", Some(Message::ShowLog)),
+        ]
+        .spacing(8);
         column![
             caption("Paste the report into a bug report so the problem can be found."),
             Space::new().height(12),
             copy,
             Space::new().height(28),
             sections(list),
+            Space::new().height(32),
+            ui::section_title("Recent Problems"),
+            Space::new().height(12),
+            problems,
+            Space::new().height(12),
+            actions,
         ]
         .into()
+    }
+
+    /// Swift `LastFMSettingsView`'s Options and Scrobble Configuration.
+    fn last_fm_options<'a>(&self, status: &Status) -> Element<'a, crate::Message> {
+        let options = status.last_fm_options.clone();
+        let flag = |on: bool, change: fn(&mut LastFMSettings, bool)| {
+            let options = options.clone();
+            toggle(on, move |on| {
+                let mut options = options.clone();
+                change(&mut options, on);
+                crate::Message::Settings(Message::LastFmOptions(Box::new(options)))
+            })
+        };
+        let number =
+            |label: String, range, value: f64, step, change: fn(&mut LastFMSettings, f64)| {
+                let options = options.clone();
+                slider_row(label, range, value, step, move |value| {
+                    let mut options = options.clone();
+                    change(&mut options, value);
+                    crate::Message::Settings(Message::LastFmOptions(Box::new(options)))
+                })
+            };
+        let percent = (options.scrobble_delay_percent * 100.0).round();
+        let rows = vec![
+            plain(
+                "Now Playing",
+                flag(options.use_now_playing, |o, on| o.use_now_playing = on),
+            ),
+            plain(
+                "Sync Likes",
+                flag(options.use_send_likes, |o, on| o.use_send_likes = on),
+            ),
+            number(
+                format!("Scrobble at {percent} %"),
+                30.0..=95.0,
+                f64::from(percent),
+                1.0,
+                |o, v| o.scrobble_delay_percent = (v / 100.0) as f32,
+            ),
+            number(
+                format!("Delay limit {} s", options.scrobble_delay_seconds),
+                30.0..=360.0,
+                options.scrobble_delay_seconds as f64,
+                10.0,
+                |o, v| o.scrobble_delay_seconds = v as i64,
+            ),
+            number(
+                format!("Minimum length {} s", options.scrobble_min_duration),
+                10.0..=60.0,
+                options.scrobble_min_duration as f64,
+                1.0,
+                |o, v| o.scrobble_min_duration = v as i64,
+            ),
+        ];
+        sections(vec![(
+            "Last.fm Options",
+            "A song is scrobbled at the percent or the delay limit, whichever comes first.",
+            group(rows),
+        )])
+    }
+
+    /// Swift `DiscordSettingsView`'s Options, Presence, Buttons and Preview.
+    /// Every keystroke saves; the Discord worker re-sends the activity.
+    fn discord_options<'a>(&self, status: &Status) -> Element<'a, crate::Message> {
+        let options = status.discord_options.clone();
+        let flag = |on: bool, change: fn(&mut DiscordSettings, bool)| {
+            let options = options.clone();
+            toggle(on, move |on| {
+                let mut options = options.clone();
+                change(&mut options, on);
+                crate::Message::Settings(Message::DiscordOptions(Box::new(options)))
+            })
+        };
+        let field = |hint: &'static str, value: &str, change: fn(&mut DiscordSettings, String)| {
+            let options = options.clone();
+            text_input(hint, value)
+                .on_input(move |value| {
+                    let mut options = options.clone();
+                    change(&mut options, value);
+                    crate::Message::Settings(Message::DiscordOptions(Box::new(options)))
+                })
+                .size(14)
+                .padding([8, 12])
+                .width(Length::Fixed(300.0))
+                .style(ui::field_style)
+                .into()
+        };
+        let mut rows = vec![plain(
+            "Advanced Mode",
+            flag(options.advanced_mode, |o, on| o.advanced_mode = on),
+        )];
+        if !options.advanced_mode {
+            return sections(vec![(
+                "Discord Options",
+                "Advanced Mode lets you change the activity, its text and its buttons.",
+                group(rows),
+            )]);
+        }
+        let kinds = [
+            ("Playing", "0"),
+            ("Listening", "2"),
+            ("Watching", "3"),
+            ("Competing", "5"),
+        ];
+        rows.push(plain(
+            "Activity Type",
+            segmented(kinds.map(|(label, value)| {
+                let mut next = options.clone();
+                next.activity_type = value.into();
+                (
+                    label,
+                    options.activity_type == value,
+                    crate::Message::Settings(Message::DiscordOptions(Box::new(next))),
+                )
+            })),
+        ));
+        rows.push(plain(
+            "Activity Name",
+            field("Artist name", &options.activity_name, |o, v| {
+                o.activity_name = v
+            }),
+        ));
+        rows.push(plain(
+            "State Template",
+            field("{artist.name}", &options.state_template, |o, v| {
+                o.state_template = v
+            }),
+        ));
+        rows.push(plain(
+            "Details Template",
+            field("{song.name}", &options.details_template, |o, v| {
+                o.details_template = v
+            }),
+        ));
+        let mut buttons = vec![plain(
+            "Button 1",
+            flag(options.button1_enabled, |o, on| o.button1_enabled = on),
+        )];
+        if options.button1_enabled {
+            buttons.push(plain(
+                "Label",
+                field("Label", &options.button1_label, |o, v| o.button1_label = v),
+            ));
+            buttons.push(plain(
+                "URL",
+                field("URL", &options.button1_url, |o, v| o.button1_url = v),
+            ));
+        }
+        buttons.push(plain(
+            "Button 2",
+            flag(options.button2_enabled, |o, on| o.button2_enabled = on),
+        ));
+        if options.button2_enabled {
+            buttons.push(plain(
+                "Label",
+                field("Label", &options.button2_label, |o, v| o.button2_label = v),
+            ));
+            buttons.push(plain(
+                "URL",
+                field("URL", &options.button2_url, |o, v| o.button2_url = v),
+            ));
+        }
+        sections(vec![
+            (
+                "Discord Options",
+                "Templates can use {song.name}, {artist.name}, {album.name} and {song.id}.",
+                group(rows),
+            ),
+            ("Buttons", "", group(buttons)),
+            ("Preview", "", discord_preview(&options)),
+        ])
     }
 
     fn discord<'a>(&self, status: &Status) -> Element<'a, crate::Message> {
@@ -963,6 +1231,92 @@ impl State {
     }
 }
 
+/// A label and a slider on one row.
+fn slider_row<'a>(
+    label: String,
+    range: std::ops::RangeInclusive<f64>,
+    value: f64,
+    step: f64,
+    change: impl Fn(f64) -> crate::Message + 'a,
+) -> Element<'a, crate::Message> {
+    row![
+        text(label).size(14).width(Length::Fixed(190.0)),
+        slider(range, value, change)
+            .step(step)
+            .style(crate::seek_style),
+    ]
+    .spacing(16)
+    .padding([14, 18])
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Swift `RichPresencePreview`: the activity as Discord shows it, for a sample song.
+fn discord_preview<'a>(options: &DiscordSettings) -> Element<'a, crate::Message> {
+    let render = |template: &str| {
+        DiscordTemplateRenderer::render(
+            template,
+            "Blinding Lights",
+            "The Weeknd",
+            Some("After Hours"),
+            "4NJhFmfw43Q",
+        )
+    };
+    let verb = match options.activity_type.as_str() {
+        "0" => "Playing",
+        "3" => "Watching",
+        "5" => "Competing in",
+        _ => "Listening to",
+    };
+    let name = if options.activity_name.is_empty() {
+        "The Weeknd".to_owned()
+    } else {
+        options.activity_name.clone()
+    };
+    let mut card = column![
+        text(format!("{verb} {name}"))
+            .size(12)
+            .color(theme::SECONDARY),
+        text(render(&options.details_template))
+            .size(15)
+            .font(theme::weight(Weight::Medium)),
+        text(render(&options.state_template))
+            .size(13)
+            .color(theme::SECONDARY),
+    ]
+    .spacing(4);
+    let labels = [
+        (options.button1_enabled, &options.button1_label),
+        (options.button2_enabled, &options.button2_label),
+    ];
+    let mut buttons = row![].spacing(8);
+    for (on, label) in labels {
+        if on {
+            buttons = buttons.push(
+                container(text(label.clone()).size(13))
+                    .padding([6, 14])
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(theme::HOVER)),
+                        border: Border::default().rounded(8),
+                        ..container::Style::default()
+                    }),
+            );
+        }
+    }
+    if options.button1_enabled || options.button2_enabled {
+        card = card.push(Space::new().height(6)).push(buttons);
+    }
+    container(card)
+        .padding(18)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Background::Color(theme::PLACEHOLDER)),
+            border: Border::default().rounded(16),
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn odesli<'a>(status: &Status) -> Element<'a, crate::Message> {
     setting(
         "Odesli song links",
@@ -1015,6 +1369,37 @@ fn playback(settings: &TransitionSettings) -> Element<'_, crate::Message> {
             )),
         ),
     ];
+    if settings.auto_mix_enabled {
+        let effects = settings.transition_effects;
+        let change = {
+            let settings = settings.clone();
+            move |value| {
+                crate::Message::Transitions(TransitionSettings {
+                    transition_effects: value,
+                    ..settings.clone()
+                })
+            }
+        };
+        // Swift lists it right under AutoMix.
+        rows.insert(
+            1,
+            row![
+                text(format!(
+                    "Transition Effects {} %",
+                    (effects * 100.0).round() as i64
+                ))
+                .size(14)
+                .width(Length::Fixed(190.0)),
+                slider(0.0..=1.0, effects, change)
+                    .step(0.05)
+                    .style(crate::seek_style),
+            ]
+            .spacing(16)
+            .padding([14, 18])
+            .align_y(Alignment::Center)
+            .into(),
+        );
+    }
     if settings.crossfade_enabled {
         let seconds = settings.crossfade_seconds;
         let length = {

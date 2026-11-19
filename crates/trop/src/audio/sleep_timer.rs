@@ -42,6 +42,11 @@ impl SleepTimer {
         self.stops_at_song_end = false;
     }
 
+    /// Time left of a running countdown.
+    pub fn left(&self, now: Instant) -> Option<Duration> {
+        self.ends_at.map(|end| end.saturating_duration_since(now))
+    }
+
     /// The countdown reached zero: the timer clears itself, the caller pauses.
     pub fn due(&mut self, now: Instant) -> bool {
         if self.ends_at.is_some_and(|end| now >= end) {

@@ -85,6 +85,39 @@ pub const AUDIO_QUALITIES: [(AudioQuality, &str); 4] = [
     (AudioQuality::Low, "Low"),
 ];
 
+/// Swift `QuickPicksSize`: columns x rows of square cards on Home.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuickPicksSize {
+    #[serde(rename = "3x2")]
+    Grid3x2,
+    #[default]
+    #[serde(rename = "3x3")]
+    Grid3x3,
+}
+
+impl QuickPicksSize {
+    pub const ALL: [Self; 2] = [Self::Grid3x2, Self::Grid3x3];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grid3x2 => "3×2",
+            Self::Grid3x3 => "3×3",
+        }
+    }
+
+    pub fn columns(self) -> usize {
+        3
+    }
+
+    pub fn rows(self) -> usize {
+        if self == Self::Grid3x2 { 2 } else { 3 }
+    }
+
+    pub fn per_page(self) -> usize {
+        self.columns() * self.rows()
+    }
+}
+
 /// Swift `ContentSettingsView.countries`.
 pub const COUNTRIES: [&str; 14] = [
     "US", "GB", "CA", "AU", "FR", "DE", "ES", "IT", "PT", "JP", "KR", "MX", "BR", "IN",
@@ -153,6 +186,8 @@ pub struct SettingsStore {
     pub hide_explicit: bool,
     #[serde(rename = "settings.showQuickPicks")]
     pub show_quick_picks: bool,
+    #[serde(rename = "settings.quickPicksSize")]
+    pub quick_picks_size: QuickPicksSize,
     #[serde(rename = "settings.contentCountry")]
     pub content_country: String,
 
@@ -213,6 +248,7 @@ impl Default for SettingsStore {
             last_radio_allow_explicit: true,
             hide_explicit: false,
             show_quick_picks: true,
+            quick_picks_size: QuickPicksSize::Grid3x3,
             content_country: "US".to_owned(),
             disabled_lyrics_providers: Vec::new(),
             lyrics_provider_order: Vec::new(),
@@ -433,6 +469,16 @@ mod tests {
         assert_eq!(settings.lyrics_provider_order[0], "lrclib");
         settings.move_lyrics_provider("genius", 1);
         assert_eq!(settings.lyrics_provider_order[4], "genius");
+    }
+
+    #[test]
+    fn quick_picks_size_uses_swift_values() {
+        let settings: SettingsStore =
+            serde_json::from_str(r#"{"settings.quickPicksSize": "3x2"}"#).unwrap();
+        assert_eq!(settings.quick_picks_size.per_page(), 6);
+        assert_eq!(SettingsStore::default().quick_picks_size.per_page(), 9);
+        let raw = serde_json::to_string(&settings).unwrap();
+        assert!(raw.contains(r#""settings.quickPicksSize":"3x2""#));
     }
 
     #[test]

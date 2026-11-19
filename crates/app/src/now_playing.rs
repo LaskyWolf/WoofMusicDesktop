@@ -58,11 +58,11 @@ impl QueueDrag {
 }
 
 /// Room the title, artists and album take under the cover.
-const INFO_HEIGHT: f32 = 120.0;
-const MAX_COVER: f32 = 640.0;
+pub(crate) const INFO_HEIGHT: f32 = 120.0;
+pub(crate) const MAX_COVER: f32 = 640.0;
 const COVER_RADIUS: f32 = 18.0;
 /// Below this content width the lyrics take the whole stage, without the cover.
-const SPLIT_MIN: f32 = 760.0;
+pub(crate) const SPLIT_MIN: f32 = 760.0;
 /// The current lyric line sits two fifths down the lyrics column.
 const LINES_ABOVE: u16 = 2;
 const LINES_BELOW: u16 = 3;
@@ -164,7 +164,7 @@ pub fn view<'a>(
         .into()
 }
 
-const SPLIT_GAP: f32 = 56.0;
+pub(crate) const SPLIT_GAP: f32 = 56.0;
 
 /// The cover, as large as `width` × `height` allows, with the title and links under it.
 fn stage<'a>(
@@ -183,7 +183,8 @@ fn stage<'a>(
             .into(),
         None => ui::cover(covers, song.thumbnail_url.as_deref(), side, COVER_RADIUS),
     };
-    let cover = container(cover).style(|_| container::Style {
+    // Swift opens the full-screen cover by pinching it; a click does it here.
+    let cover = mouse_area(container(cover).style(|_| container::Style {
         border: Border::default().rounded(COVER_RADIUS),
         shadow: Shadow {
             color: Color {
@@ -195,12 +196,17 @@ fn stage<'a>(
         },
         background: Some(Background::Color(Color::BLACK)),
         ..container::Style::default()
-    });
+    }))
+    .on_press(Message::FullscreenCover(true));
     let mut info = column![
-        text(ui::fit(&song.title, side.max(width.min(420.0)), 28.0))
-            .size(28)
-            .font(theme::weight(Weight::Bold))
-            .wrapping(text::Wrapping::None),
+        crate::marquee::marquee(
+            &song.title,
+            28.0,
+            side.max(width.min(420.0)),
+            theme::weight(Weight::Bold),
+            theme::TEXT,
+            true,
+        ),
         artist_links(song),
     ]
     .spacing(4)
@@ -405,7 +411,9 @@ fn lyric_line(
         );
     }
     let timed = line.start_time.is_some();
-    button(body)
+    // Swift's context menu has one item, Copy Line; right-click copies at once.
+    let copy = Message::CopyLine(line.text.clone());
+    let line = button(body)
         .width(Length::Fill)
         .padding([8, 12])
         .on_press_maybe(line.start_time.map(Message::SeekTo))
@@ -414,8 +422,8 @@ fn lyric_line(
                 .then_some(Background::Color(theme::HOVER)),
             border: Border::default().rounded(14),
             ..button::Style::default()
-        })
-        .into()
+        });
+    mouse_area(line).on_right_press(copy).into()
 }
 
 /// Swift `KaraokeRenderer` fills a word left to right with a clip; a span

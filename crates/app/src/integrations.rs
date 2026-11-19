@@ -54,6 +54,9 @@ pub struct Status {
     pub share_links: bool,
     /// An Odesli API key is saved, so Spotify and Apple Music links open.
     pub odesli_connected: bool,
+    /// All the Last.fm and Discord options, for the Settings groups.
+    pub last_fm_options: LastFMSettings,
+    pub discord_options: DiscordSettings,
 }
 
 /// A change Settings asks for. Each answers with the new `Status`.
@@ -63,6 +66,9 @@ pub enum Action {
     SetDiscord(bool),
     SetScrobbling(bool),
     SetShareLinks(bool),
+    /// Saves the Last.fm options (the sign-in stays as it is).
+    SetLastFmOptions(Box<LastFMSettings>),
+    SetDiscordOptions(Box<DiscordSettings>),
     /// Opens the Last.fm approval page and waits until it is approved.
     LastFmSignIn,
     LastFmSignOut,
@@ -267,6 +273,27 @@ impl Worker {
                     .save(&self.discord_path)
                     .map_err(save_error)
             }
+            Action::SetDiscordOptions(options) => {
+                self.discord.settings = *options;
+                // The presence is sent again with the new templates and buttons.
+                self.discord.shown = None;
+                self.discord.last_attempt = None;
+                self.discord.sync(self.now.as_deref());
+                self.discord
+                    .settings
+                    .save(&self.discord_path)
+                    .map_err(save_error)
+            }
+            Action::SetLastFmOptions(options) => {
+                // The sign-in and the scrobbling switch belong to the integration.
+                let mut settings = self.last_fm.settings();
+                settings.use_now_playing = options.use_now_playing;
+                settings.use_send_likes = options.use_send_likes;
+                settings.scrobble_delay_percent = options.scrobble_delay_percent;
+                settings.scrobble_min_duration = options.scrobble_min_duration;
+                settings.scrobble_delay_seconds = options.scrobble_delay_seconds;
+                settings.save(&self.last_fm_path).map_err(save_error)
+            }
             Action::SetScrobbling(enabled) => self.last_fm.set_enabled(enabled).map_err(save_error),
             Action::SetShareLinks(enabled) => {
                 self.odesli.share_links = enabled;
@@ -330,6 +357,8 @@ impl Worker {
             listen_brainz_user: self.listen_brainz.user_name().map(str::to_owned),
             share_links: self.odesli.share_links,
             odesli_connected: Odesli::new(Session::shared()).is_connected(),
+            last_fm_options: self.last_fm.settings(),
+            discord_options: self.discord.settings.clone(),
         }
     }
 }
@@ -354,7 +383,7 @@ fn save_error(error: std::io::Error) -> String {
     format!("Couldn't save the setting: {error}")
 }
 
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+pub fn open_in_browser(url: &str) -> std::io::Result<()> {
     #[cfg(windows)]
     let program = "explorer";
     #[cfg(target_os = "macos")]

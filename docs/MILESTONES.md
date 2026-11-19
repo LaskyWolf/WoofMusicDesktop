@@ -130,8 +130,8 @@ Downloads and song menu [worker: downloads]
 - [ ] Song menu: Similar Songs, Song Details, artist picker for several artists, artist kind label, Added by (`RadioViews`, `ArtistPickerSheet`, `ArtistKindService`)
 
 Settings and player looks [worker: polish]
-- [ ] Last.fm options, Discord options, Transition Effects slider, Quick Picks size, Diagnostics extras (`LastFMSettingsView`, `DiscordSettingsView`, `DiagnosticsView`)
-- [ ] Copy Line on a lyric line; sleep-end night sky, Radio Bloom, full-screen cover, rolling skip glyph, scrolling long titles (`SleepEndedAnimation`, `RadioBloom`, `FullscreenCoverOverlay`, `AnimatedSkipLabel`, `MarqueeText`)
+- [x] Last.fm options, Discord options (not the Discord user status), Transition Effects slider, Quick Picks size (the setting; Home reads it), Diagnostics extras (`LastFMSettingsView`, `DiscordSettingsView`, `DiagnosticsView`)
+- [x] Copy Line on a lyric line (right-click); sleep-end night sky (no glow shader), Radio Bloom (rings and covers; no antenna), full-screen cover (click the cover; no flight), rolling skip glyph, scrolling long titles (`SleepEndedAnimation`, `RadioBloom`, `FullscreenCoverOverlay`, `AnimatedSkipLabel`, `MarqueeText`)
 - [ ] Explore mood family chips with a path, New releases shelf style (`ExploreViewModel`, `NewReleasesSection`); change profile picture (`ProfilePictureWebView`)
 
 Done when: every line above works, and the bug-fix session's checks pass on main.
