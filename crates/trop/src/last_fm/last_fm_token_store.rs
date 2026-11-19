@@ -66,7 +66,8 @@ impl LastFMTokenStore {
         if let Err(error) = self.store.delete(Self::SESSION_KEY_ACCOUNT) {
             log::error!("Could not delete the Last.fm session: {error}");
         }
-        *cached = None;
+        // Logged out now, even if the keyring kept the key: no second read.
+        *cached = Some(String::new());
         self.set_username(None);
     }
 

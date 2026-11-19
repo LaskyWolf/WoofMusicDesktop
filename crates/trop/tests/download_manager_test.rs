@@ -298,6 +298,8 @@ async fn a_huge_batch_of_failing_songs_is_counted_and_closes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// /dev/full exists only on Linux and the BSDs.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_full_disk_fails_the_song_and_leaves_no_part_file() {
     let (manager, dir) = manager_in("disk-full");
