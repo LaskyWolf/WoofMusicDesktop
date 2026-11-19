@@ -1175,23 +1175,14 @@ pub(crate) fn save_card(
     name: &str,
 ) -> Result<PathBuf, String> {
     let bounds = bounds.ok_or("the card was not on screen")?;
-    let scale = shot.scale_factor;
-    let region = Rectangle {
-        x: (bounds.x * scale).round() as u32,
-        y: (bounds.y * scale).round() as u32,
-        width: (bounds.width * scale).round() as u32,
-        height: (bounds.height * scale).round() as u32,
-    };
+    let region = card_region(bounds, shot.size, shot.scale_factor)?;
     let card = shot.crop(region).map_err(|error| format!("{error:?}"))?;
     let folder = dirs::picture_dir()
         .or_else(dirs::home_dir)
         .ok_or("there is no Pictures folder")?
         .join("WoofMusic");
     std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-    let clean: String = name
-        .chars()
-        .map(|c| if "/\\:*?\"<>|".contains(c) { '-' } else { c })
-        .collect();
+    let clean = clean_file_name(name);
     let path = (1..)
         .map(|n| match n {
             1 => folder.join(format!("{clean}.png")),
@@ -1203,6 +1194,49 @@ pub(crate) fn save_card(
     Ok(path)
 }
 
+/// The card's pixels inside the window screenshot. A card cut off by a small
+/// window is refused: cropping it would save a shifted or partial image.
+fn card_region(
+    bounds: Rectangle,
+    window: iced::Size<u32>,
+    scale: f32,
+) -> Result<Rectangle<u32>, String> {
+    let (x, y) = ((bounds.x * scale).round(), (bounds.y * scale).round());
+    let (width, height) = (
+        (bounds.width * scale).round(),
+        (bounds.height * scale).round(),
+    );
+    if x < 0.0 || y < 0.0 || x + width > window.width as f32 || y + height > window.height as f32 {
+        return Err("the whole card must be on screen: make the window taller".into());
+    }
+    Ok(Rectangle {
+        x: x as u32,
+        y: y as u32,
+        width: width as u32,
+        height: height as u32,
+    })
+}
+
+/// A name every file system takes: no separators or control characters, at
+/// most 60 characters (a name over 255 bytes cannot be created), never empty.
+fn clean_file_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .take(60)
+        .collect();
+    match clean.trim().trim_matches('.') {
+        "" => "Woof card".into(),
+        name => name.to_owned(),
+    }
+}
+
 const MORE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="#fff"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></g></svg>"##;
 const MINUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 12h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>"##;
 const PLUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 12h12M12 6v12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>"##;
@@ -1211,7 +1245,32 @@ const TICK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24
 
 #[cfg(test)]
 mod tests {
-    use super::split_query;
+    use super::{card_region, clean_file_name, split_query};
+    use iced::{Rectangle, Size};
+
+    #[test]
+    fn a_card_cut_off_by_the_window_is_not_cropped() {
+        let window = Size::new(1100, 700);
+        let card = |y| Rectangle::new(iced::Point::new(10.0, y), Size::new(360.0, 400.0));
+        let region = card_region(card(20.0), window, 1.25).unwrap();
+        assert_eq!((region.x, region.y, region.width), (13, 25, 450));
+        // Below the window's bottom, or above its top.
+        assert!(card_region(card(300.0), window, 1.25).is_err());
+        assert!(card_region(card(-30.0), window, 1.25).is_err());
+    }
+
+    #[test]
+    fn a_card_name_is_a_valid_short_file_name() {
+        assert_eq!(
+            clean_file_name("AC/DC – Back: In Black"),
+            "AC-DC – Back- In Black"
+        );
+        assert_eq!(clean_file_name("a\nb\0c"), "a-b-c");
+        assert_eq!(clean_file_name(".."), "Woof card");
+        assert_eq!(clean_file_name("  "), "Woof card");
+        // Room is left for " 12.png" under the 255-byte limit.
+        assert!(clean_file_name(&"😀".repeat(500)).len() + 8 <= 255);
+    }
 
     #[test]
     fn a_query_with_a_dash_names_the_artist() {
