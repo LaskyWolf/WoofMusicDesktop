@@ -3,9 +3,10 @@
 mod common;
 
 use common::{expect_well_formed, fixture, fixture_bytes};
-use trop::networking::models::yt_item::YTItem;
+use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::search::search_view_model::{self as model, SearchSort};
 
 const ORDER: [&str; 7] = [
     "Top result",
@@ -139,4 +140,132 @@ fn top_result_playlist_id_loses_only_the_vl_prefix() {
     ]}}});
     let sections = SearchParser::parse_search_results(response.as_object().unwrap());
     assert_eq!(sections[0].items[0].id(), "PLabcVLdef");
+}
+
+#[test]
+fn an_artist_query_lifts_the_top_artist_into_the_hero() {
+    let mut results = sections();
+    let hero = model::extract_hero(&mut results, "daft punk").unwrap();
+    assert_eq!(hero.artist.name, "Daft Punk");
+    assert!(hero.detail.is_some_and(|d| !d.is_empty()));
+    assert!(results.iter().all(|s| s.title != "Top result"));
+    assert!(results.iter().all(|s| !s.items.is_empty()));
+}
+
+#[test]
+fn a_song_query_lists_the_top_artist_first_among_artists() {
+    let mut results = sections();
+    assert!(model::extract_hero(&mut results, "get lucky").is_none());
+    let artists = &named(&results, "Artists").items;
+    assert_eq!(artists[0].title(), "Daft Punk");
+    let ids: std::collections::HashSet<&str> = artists.iter().map(YTItem::id).collect();
+    assert_eq!(ids.len(), artists.len());
+}
+
+#[test]
+fn display_puts_songs_first_and_filters_follow_it() {
+    let mut results = sections();
+    model::extract_hero(&mut results, "daft punk");
+    let shown = model::display_sections(&results, SearchSort::Relevant, &Default::default());
+    assert_eq!(shown[0].title, "Songs");
+    assert_eq!(
+        model::available_filters(&results)[..2],
+        ["Library", "Songs"]
+    );
+}
+
+#[test]
+fn rating_date_and_recent_sorts_reorder_songs_keeping_ties_in_place() {
+    let song = |id: &str, views: Option<i64>, year: Option<i64>| {
+        YTItem::Song(SongItem {
+            video_id: id.into(),
+            view_count: views,
+            year,
+            ..SongItem::default()
+        })
+    };
+    let results = vec![SearchSection::new(
+        "Songs",
+        vec![
+            song("a", Some(5), None),
+            song("b", None, Some(2001)),
+            song("c", Some(9), Some(2020)),
+            song("d", Some(5), None),
+        ],
+        None,
+    )];
+    let ids = |sort, recency: &std::collections::HashMap<String, std::time::SystemTime>| {
+        model::display_sections(&results, sort, recency)[0]
+            .items
+            .iter()
+            .map(|i| i.id().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let none = Default::default();
+    assert_eq!(ids(SearchSort::Relevant, &none), ["a", "b", "c", "d"]);
+    assert_eq!(ids(SearchSort::Rating, &none), ["c", "a", "d", "b"]);
+    assert_eq!(ids(SearchSort::Date, &none), ["c", "b", "a", "d"]);
+    let recency = [("d".to_owned(), std::time::SystemTime::now())].into();
+    assert_eq!(ids(SearchSort::Recent, &recency), ["d", "a", "b", "c"]);
+}
+
+#[test]
+fn local_search_finds_library_songs_artists_and_playlists() {
+    use trop::database::database_service::DatabaseService;
+    use trop::database::entities::artist_entity::ArtistEntity;
+    use trop::database::entities::playlist_entity::PlaylistEntity;
+    use trop::database::entities::song_entity::SongEntity;
+    let db = DatabaseService::open_in_memory();
+    let now = std::time::SystemTime::now();
+    db.insert(&SongEntity {
+        id: "s1".into(),
+        title: "One More Time".into(),
+        artist_name: Some("Daft Punk".into()),
+        album_name: None,
+        duration: 320,
+        thumbnail_url: None,
+        liked: false,
+        total_play_time: 0,
+        in_library: None,
+        library_add_token: String::new(),
+        library_remove_token: String::new(),
+        is_episode: false,
+        is_uploaded: false,
+        is_video: false,
+        create_date: now,
+        modify_date: now,
+        is_unavailable: false,
+    })
+    .unwrap();
+    db.insert(&ArtistEntity {
+        id: "UCdp".into(),
+        name: "Daft Punk".into(),
+        thumbnail_url: None,
+        bookmarked_at: Some(now),
+        is_podcast_channel: false,
+        channel_id: None,
+    })
+    .unwrap();
+    for (id, name) in [("PLdp", "Daft Punk mix"), ("SE", "Daft Punk episodes")] {
+        db.insert(&PlaylistEntity {
+            id: id.into(),
+            browse_id: None,
+            name: name.into(),
+            thumbnail_url: None,
+            is_editable: false,
+            bookmarked_at: None,
+            remote_song_count: Some(3),
+            is_auto_sync: false,
+        })
+        .unwrap();
+    }
+    let found = SearchService::local_search(&db, "daft").unwrap();
+    let titles: Vec<&str> = found.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, ["Songs", "Artists", "Playlists"]);
+    assert_eq!(found[2].items.len(), 1, "the hidden SE playlist stays out");
+    assert!(
+        SearchService::local_search(&db, "adele")
+            .unwrap()
+            .is_empty()
+    );
 }
