@@ -2,7 +2,8 @@
 Type=Application
 Name=WoofMusic
 Comment=Play YouTube Music with your Google account
-Exec=woofmusic
+Exec=woofmusic %u
 Icon=woofmusic
 Categories=AudioVideo;Audio;Player;
 StartupWMClass=com.laskywolf.woofmusic
+MimeType=x-scheme-handler/woofmusic;

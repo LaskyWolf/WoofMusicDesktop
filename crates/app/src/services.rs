@@ -51,6 +51,19 @@ use trop::settings::settings_store::SettingsStore;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
 
 use crate::{Detail, Route};
+use trop::odesli::odesli::Odesli;
+use trop::utilities::music_link::{self, MusicLink};
+
+/// Swift `MusicLinkOpener.open(nil)`: what the app can open.
+pub const LINK_HELP: &str = "Woof Music opens YouTube and YouTube Music links to songs, playlists, albums, artists and podcasts, Shazam links to songs, and Spotify and Apple Music links through Odesli.";
+
+/// Where a music link leads.
+#[derive(Debug, Clone)]
+pub enum LinkTarget {
+    Route(Route),
+    /// A radio that starts on the linked song.
+    Play(Arc<Vec<SongItem>>, usize),
+}
 
 pub struct Services {
     pub client: Arc<InnerTubeClient>,
@@ -559,6 +572,90 @@ impl Services {
         options: RadioOptions,
     ) -> Result<(Vec<SongItem>, usize), String> {
         personalization_service::fetch_radio(&self.client, &video_id, options).await
+    }
+
+    /// Swift `MusicLinkOpener.open(url:)`: what a pasted or launched link
+    /// opens. Spotify and Apple Music links go through Odesli first; the
+    /// error is a sentence for the user.
+    pub async fn open_link(self: Arc<Self>, text: String) -> Result<LinkTarget, String> {
+        let text = text.trim().to_owned();
+        let link = match MusicLink::parse(&text) {
+            Some(link) => link,
+            None if Odesli::is_convertible(&text) => Odesli::new(Session::shared())
+                .convert(&text)
+                .await
+                .map_err(|error| error.to_string())?,
+            None => return Err(LINK_HELP.to_owned()),
+        };
+        let video_id = match link {
+            MusicLink::Song(id) => id,
+            MusicLink::Playlist(id) => return Ok(LinkTarget::Route(Route::Playlist(id))),
+            MusicLink::Album(id) => return Ok(LinkTarget::Route(Route::Album(id))),
+            MusicLink::Artist(id) => return Ok(LinkTarget::Route(Route::Artist(id))),
+            MusicLink::Podcast(id) => return Ok(LinkTarget::Route(Route::Podcast(id))),
+            MusicLink::Shazam(url) => self.clone().shazam_song(&url).await?,
+        };
+        // The radio carries the song's title and artwork, which a bare ID doesn't have.
+        let unavailable =
+            || "This song couldn't be loaded. It may be unavailable, or you may be offline.";
+        let (songs, index) = self
+            .radio(video_id.clone(), RadioOptions::default())
+            .await
+            .map_err(|_| unavailable())?;
+        match songs.get(index) {
+            Some(song) if song.video_id == video_id && song.is_available() => {
+                Ok(LinkTarget::Play(Arc::new(songs), index))
+            }
+            _ => Err(unavailable().to_owned()),
+        }
+    }
+
+    /// Swift `MusicLinkOpener.playShazam`: the first song result with the
+    /// Shazam page's title, else the first song.
+    async fn shazam_song(self: Arc<Self>, url: &str) -> Result<String, String> {
+        let unreadable = "This Shazam link couldn't be read. Check your connection, or search for the song by name.";
+        let page = async {
+            self.http
+                .get(url)
+                .header(reqwest::header::USER_AGENT, music_link::SHAZAM_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await?
+                .text()
+                .await
+        };
+        let track = page
+            .await
+            .ok()
+            .and_then(|html| music_link::shazam_track(&html))
+            .ok_or(unreadable)?;
+        let sections = self
+            .clone()
+            .search(format!("{} {}", track.title, track.artist))
+            .await
+            .map_err(|_| {
+                format!(
+                    "Couldn't search for \"{}\". Check your connection.",
+                    track.title
+                )
+            })?;
+        let songs: Vec<SongItem> = sections
+            .iter()
+            .flat_map(|section| crate::ui::songs_of(&section.items).to_vec())
+            .filter(|song| song.is_available())
+            .collect();
+        let wanted = track.title.to_lowercase();
+        songs
+            .iter()
+            .find(|song| song.title.to_lowercase().contains(&wanted))
+            .or(songs.first())
+            .map(|song| song.video_id.clone())
+            .ok_or_else(|| {
+                format!(
+                    "\"{}\" by {} wasn't found on YouTube Music.",
+                    track.title, track.artist
+                )
+            })
     }
 
     /// The saved playlists "Add to Playlist" offers (Swift `fetchPlaylists(limit: 100)`).

@@ -10,6 +10,7 @@ use swiftytube::networking::http_client::Session;
 
 use super::odesli_defaults::OdesliDefaults;
 use super::odesli_service::{OdesliError, OdesliService};
+use crate::utilities::music_link::MusicLink;
 
 #[derive(Deserialize)]
 struct OdesliResponse {
@@ -80,12 +81,12 @@ impl Odesli {
     }
 
     /// Sends `link` to Odesli and returns the same music on YouTube.
-    // ponytail: returns the YouTube URL; Swift returns it parsed as a
-    // `MusicLink`. Parse it here once `Utilities/MusicLink.swift` is translated.
-    pub async fn convert(&self, link: &str) -> Result<String, OdesliError> {
+    pub async fn convert(&self, link: &str) -> Result<MusicLink, OdesliError> {
         let key = self.key.as_deref().ok_or(OdesliError::NotConnected)?;
         let response = OdesliService::links(&self.session, link, key).await?;
-        Self::youtube_link(&response).ok_or(OdesliError::NotFound)
+        Self::youtube_link(&response)
+            .and_then(|url| MusicLink::parse(&url))
+            .ok_or(OdesliError::NotFound)
     }
 
     /// True for Spotify and Apple Music links. Only these may go to Odesli, so

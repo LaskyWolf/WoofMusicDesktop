@@ -25,6 +25,7 @@ use trop::last_fm::last_fm_token_store::LastFMTokenStore;
 use trop::listen_brainz::listen_brainz::ListenBrainz;
 use trop::listen_brainz::listen_brainz_defaults::ListenBrainzSettings;
 use trop::networking::models::yt_item::SongItem;
+use trop::odesli::odesli::Odesli;
 use trop::odesli::odesli_defaults::OdesliSettings;
 
 use super::{PlayState, Player};
@@ -51,6 +52,8 @@ pub struct Status {
     pub scrobbling: bool,
     pub listen_brainz_user: Option<String>,
     pub share_links: bool,
+    /// An Odesli API key is saved, so Spotify and Apple Music links open.
+    pub odesli_connected: bool,
 }
 
 /// A change Settings asks for. Each answers with the new `Status`.
@@ -65,6 +68,8 @@ pub enum Action {
     LastFmSignOut,
     ListenBrainzConnect(String),
     ListenBrainzDisconnect,
+    OdesliConnect(String),
+    OdesliDisconnect,
 }
 
 type Reply = oneshot::Sender<Result<Status, String>>;
@@ -280,6 +285,14 @@ impl Worker {
                 self.listen_brainz.disconnect();
                 Ok(())
             }
+            Action::OdesliConnect(key) => Odesli::new(Session::shared())
+                .connect(&key)
+                .await
+                .map_err(|error| error.to_string()),
+            Action::OdesliDisconnect => {
+                Odesli::new(Session::shared()).disconnect();
+                Ok(())
+            }
         }
     }
 
@@ -316,6 +329,7 @@ impl Worker {
             scrobbling: self.last_fm.is_enabled(),
             listen_brainz_user: self.listen_brainz.user_name().map(str::to_owned),
             share_links: self.odesli.share_links,
+            odesli_connected: Odesli::new(Session::shared()).is_connected(),
         }
     }
 }

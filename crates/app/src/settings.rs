@@ -59,6 +59,9 @@ pub struct State {
     token: String,
     listen_brainz_connecting: bool,
     listen_brainz_error: Option<String>,
+    odesli_key: String,
+    odesli_connecting: bool,
+    odesli_error: Option<String>,
     /// The song whose link was copied: its button shows a check.
     copied: Option<String>,
 }
@@ -81,6 +84,10 @@ pub enum Message {
     ListenBrainzConnect,
     ListenBrainzDone(Result<Status, String>),
     ListenBrainzDisconnect,
+    OdesliKeyInput(String),
+    OdesliConnect,
+    OdesliDone(Result<Status, String>),
+    OdesliDisconnect,
     /// Copies the song.link page of this video.
     CopyLink(String),
 }
@@ -157,6 +164,9 @@ impl State {
             token: String::new(),
             listen_brainz_connecting: false,
             listen_brainz_error: None,
+            odesli_key: String::new(),
+            odesli_connecting: false,
+            odesli_error: None,
             copied: None,
         }
     }
@@ -291,6 +301,31 @@ impl State {
                 Task::none()
             }
             Message::ListenBrainzDisconnect => ask(Action::ListenBrainzDisconnect, Message::Loaded),
+            Message::OdesliKeyInput(key) => {
+                self.odesli_key = key;
+                Task::none()
+            }
+            Message::OdesliConnect => {
+                let key = self.odesli_key.trim().to_owned();
+                if key.is_empty() || self.odesli_connecting {
+                    return Task::none();
+                }
+                self.odesli_connecting = true;
+                self.odesli_error = None;
+                ask(Action::OdesliConnect(key), Message::OdesliDone)
+            }
+            Message::OdesliDone(result) => {
+                self.odesli_connecting = false;
+                match result {
+                    Ok(status) => {
+                        self.status = Some(status);
+                        self.odesli_key.clear();
+                    }
+                    Err(error) => self.odesli_error = Some(error),
+                }
+                Task::none()
+            }
+            Message::OdesliDisconnect => ask(Action::OdesliDisconnect, Message::Loaded),
             Message::CopyLink(video_id) => {
                 let url = OdesliDefaults::song_page_url(&video_id);
                 self.copied = Some(video_id);
@@ -675,6 +710,7 @@ impl State {
                 self.last_fm(status),
                 self.listen_brainz(status),
                 odesli(status),
+                self.odesli_key(status),
                 listen_together(),
             ]),
         ];
@@ -841,6 +877,49 @@ impl State {
             detail = detail.push(error_text(error));
         }
         setting("ListenBrainz", detail.into(), None)
+    }
+
+    /// Swift `OdesliSettingsView`: the key that opens Spotify and Apple Music links.
+    fn odesli_key<'a>(&'a self, status: &'a Status) -> Element<'a, crate::Message> {
+        if status.odesli_connected {
+            return setting(
+                "Odesli API key",
+                caption("Connected. Each Spotify or Apple Music link you open is sent to Odesli."),
+                Some(quiet_button("Disconnect", Some(Message::OdesliDisconnect))),
+            );
+        }
+        let connecting = self.odesli_connecting;
+        let can_connect = !connecting && !self.odesli_key.trim().is_empty();
+        let mut field = text_input("API key", &self.odesli_key)
+            .secure(true)
+            .size(14)
+            .padding([9, 14])
+            .style(ui::field_style);
+        if !connecting {
+            field = field
+                .on_input(|key| crate::Message::Settings(Message::OdesliKeyInput(key)))
+                .on_submit(crate::Message::Settings(Message::OdesliConnect));
+        }
+        let mut detail = column![
+            caption(
+                "Opens Spotify and Apple Music links pasted in Search on YouTube Music. Ask for a key at developers@song.link."
+            ),
+            row![
+                field,
+                ui::accent_button(
+                    if connecting { "Connecting…" } else { "Connect" },
+                    None,
+                    can_connect.then_some(crate::Message::Settings(Message::OdesliConnect)),
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(10);
+        if let Some(error) = &self.odesli_error {
+            detail = detail.push(error_text(error));
+        }
+        setting("Odesli API key", detail.into(), None)
     }
 
     /// The player bar's "Copy song link" button; `None` while Odesli is off.

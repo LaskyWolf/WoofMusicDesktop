@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use swiftytube::networking::http_client::{HttpResponse, Session};
 use trop::odesli::odesli::{Odesli, OdesliConnectError};
 use trop::odesli::odesli_service::{OdesliError, OdesliService};
+use trop::utilities::music_link::MusicLink;
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!(
@@ -121,9 +122,8 @@ async fn connect_validates_with_the_test_song_then_converts() {
     assert_eq!(
         odesli
             .convert("https://open.spotify.com/track/0DiWol3AO6WpXZgp0goxAV")
-            .await
-            .as_deref(),
-        Ok("https://music.youtube.com/watch?v=FGBhQbmPwH8")
+            .await,
+        Ok(MusicLink::Song("FGBhQbmPwH8".into()))
     );
 
     // The key survives a restart, until disconnect.

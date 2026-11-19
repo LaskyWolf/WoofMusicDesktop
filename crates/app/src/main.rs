@@ -430,6 +430,9 @@ pub enum Message {
     DetailLoaded(String, Result<Arc<Detail>, String>),
     SearchInput(String),
     SearchSubmit,
+    /// A music link from the search box or the command line.
+    OpenLink(String),
+    LinkOpened(Result<services::LinkTarget, String>),
     SearchLoaded(String, Result<Vec<SearchSection>, String>),
     /// Reload the page on screen after a failure.
     Retry,
@@ -619,7 +622,9 @@ impl App {
                 app.query = query;
                 Task::done(Message::SearchSubmit)
             }
-            Err(_) => Task::none(),
+            Err(_) => {
+                launch_link().map_or(Task::none(), |link| Task::done(Message::OpenLink(link)))
+            }
         };
         let enter = app.enter();
         let restored = app.song_changed();
@@ -1023,6 +1028,9 @@ impl App {
                 if query.is_empty() {
                     return Task::none();
                 }
+                if is_music_link(&query) {
+                    return self.update(Message::OpenLink(query));
+                }
                 self.searched = query.clone();
                 self.results = Some(Load::Loading);
                 Task::perform(self.services.clone().search(query.clone()), move |result| {
@@ -1078,6 +1086,20 @@ impl App {
                 Task::none()
             }
             Message::PlayQueue(songs, index) => self.play(songs, index),
+            Message::OpenLink(link) => Task::batch([
+                self.notify("Opening link…"),
+                Task::perform(self.services.clone().open_link(link), Message::LinkOpened),
+            ]),
+            Message::LinkOpened(Ok(services::LinkTarget::Route(route))) => {
+                self.queue_open = false;
+                self.now_playing = false;
+                self.update(Message::Navigate(route))
+            }
+            Message::LinkOpened(Ok(services::LinkTarget::Play(songs, index))) => {
+                self.now_playing = true;
+                self.play(songs, index)
+            }
+            Message::LinkOpened(Err(problem)) => self.notify(&problem),
             Message::Resolved(request, result) => {
                 if request != self.player.request {
                     return Task::none();
@@ -2896,6 +2918,23 @@ fn dev_seek_end(services: &Services, player: &Player) {
     {
         mpv.seek(player.duration - lead);
     }
+}
+
+/// A link the app was started with: `woofmusic <link>`, or the
+/// `woofmusic://open?url=<link>` the desktop file hands over.
+fn launch_link() -> Option<String> {
+    let arg = std::env::args().nth(1)?;
+    if arg.starts_with("woofmusic:") {
+        trop::utilities::music_link::MusicLink::wrapped_link(&arg)
+    } else {
+        is_music_link(&arg).then_some(arg)
+    }
+}
+
+/// Swift `SearchViewModel.submit`: a link opens instead of being searched.
+fn is_music_link(text: &str) -> bool {
+    trop::utilities::music_link::MusicLink::parse(text).is_some()
+        || trop::odesli::odesli::Odesli::is_convertible(text)
 }
 
 /// WOOF_PLAY=1 plays from Home, or from the results when WOOF_SEARCH is set.
