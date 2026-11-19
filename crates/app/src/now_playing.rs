@@ -340,14 +340,17 @@ fn lyric_line(
         .as_ref()
         .filter(|_| style.karaoke && distance == 0);
     let main: Element<'_, Message> = match words {
-        // ponytail: whole words light up; Swift also fills the current word left to right.
         Some(words) => {
             let spans: Vec<text::Span<'_, (), iced::Font>> = words
                 .iter()
-                .map(|word| {
-                    let sung = word.start_time <= style.time;
-                    text::Span::new(word.text.as_str()).color(white(if sung { 1.0 } else { 0.35 }))
+                .flat_map(|word| {
+                    // Swift: a last word with no end tag fills over 0.5 s.
+                    let end = word.end_time.unwrap_or(word.start_time + 0.5);
+                    let progress =
+                        (style.time - word.start_time) / (end - word.start_time).max(0.01);
+                    fill_pieces(&word.text, progress)
                 })
+                .map(|(piece, a)| text::Span::new(piece).color(white(a)))
                 .collect();
             rich_text(spans)
                 .size(size)
@@ -413,6 +416,33 @@ fn lyric_line(
             ..button::Style::default()
         })
         .into()
+}
+
+/// Swift `KaraokeRenderer` fills a word left to right with a clip; a span
+/// here has one colour, so the word is cut into characters that light up in
+/// turn, the one being sung fading in. `progress` is 0 before the word, 1 after.
+// ponytail: separate spans break letter joining in cursive scripts (Arabic) during
+// the word, and right-to-left words fill backwards, as in Swift; a clipping text widget fixes both.
+pub fn fill_pieces(word: &str, progress: f64) -> Vec<(&str, f32)> {
+    const DIM: f32 = 0.35;
+    let alpha = |sung: f64| DIM + (1.0 - DIM) * sung.clamp(0.0, 1.0) as f32;
+    if progress <= 0.0 || progress >= 1.0 {
+        return vec![(word, alpha(progress))];
+    }
+    let lit = progress * word.chars().count() as f64;
+    let mut pieces: Vec<(&str, f32)> = Vec::new();
+    let mut start = 0;
+    let mut last = None;
+    for (i, (at, _)) in word.char_indices().enumerate() {
+        let a = alpha(lit - i as f64);
+        if last.is_some_and(|prev| prev != a) {
+            pieces.push((&word[start..at], last.unwrap_or(DIM)));
+            start = at;
+        }
+        last = Some(a);
+    }
+    pieces.push((&word[start..], last.unwrap_or(DIM)));
+    pieces
 }
 
 fn note_text(label: &str) -> Element<'_, Message> {
@@ -562,7 +592,22 @@ mod icons {
 
 #[cfg(test)]
 mod tests {
-    use super::QueueDrag;
+    use super::{QueueDrag, fill_pieces};
+
+    #[test]
+    fn a_word_fills_left_to_right() {
+        assert_eq!(fill_pieces("love ", 0.0), [("love ", 0.35)]);
+        assert_eq!(fill_pieces("love ", 1.2), [("love ", 1.0)]);
+        // Halfway: "lo" sung, "v" half lit, "e " still dim.
+        let half = fill_pieces("love ", 0.5);
+        assert_eq!(half.iter().map(|p| p.0).collect::<String>(), "love ");
+        assert_eq!(half[0], ("lo", 1.0));
+        assert_eq!(half[1].0, "v");
+        assert!(half[1].1 > 0.35 && half[1].1 < 1.0);
+        assert_eq!(half[2], ("e ", 0.35));
+        // Multi-byte characters are cut on their boundaries.
+        assert_eq!(fill_pieces("愛してる", 0.5)[0], ("愛し", 1.0));
+    }
 
     /// The rows show the order the queue will have after the drop.
     #[test]

@@ -1228,7 +1228,9 @@ impl App {
                 Task::none()
             }
             Message::Dismiss => {
-                if self.menu.is_some() {
+                if self.lyrics_extras.close_sheet() {
+                    Task::none()
+                } else if self.menu.is_some() {
                     self.menu = None;
                     Task::none()
                 } else if self.comments.open {
@@ -2013,7 +2015,12 @@ impl App {
         ];
         if self.player.song().is_some() {
             // Lyric lines change on the beat; crossfades plan and start on a 0.25 s tick (Swift).
-            let every = if self.showing_lyrics() { 150 } else { 250 };
+            // Karaoke fills words within a word's length: redraw more often.
+            let every = match (self.showing_lyrics(), self.lyrics_extras.karaoke) {
+                (true, true) => 50,
+                (true, false) => 150,
+                _ => 250,
+            };
             subscriptions
                 .push(iced::time::every(Duration::from_millis(every)).map(|_| Message::Tick));
         }

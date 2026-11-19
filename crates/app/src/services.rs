@@ -19,9 +19,10 @@ use swiftytube::streaming::stream_fallback::{StreamFallback, StreamResolveReques
 use swiftytube::streaming::stream_resolver::{StreamResolveOptions, StreamResolveProviders};
 use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::playlist_detail_service::PlaylistDetailService;
-use trop::audio::lyrics::lyrics_manager::LyricsManager;
+use trop::audio::lyrics::lyrics_manager::{LyricSearchResult, LyricsManager};
 use trop::audio::lyrics::lyrics_service::{LyricLine, LyricsService, LyricsSong};
 use trop::audio::lyrics::lyrics_view::{self, InstrumentalGap};
+use trop::audio::lyrics::providers::lyrics_provider::LyricsQuery;
 use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::audio::sponsor_block::{self, Segment};
@@ -190,6 +191,32 @@ impl Services {
     /// Asks the providers again, replacing an edited or picked copy.
     pub async fn refetch_lyrics(self: Arc<Self>, song: SongItem) {
         self.lyrics.refetch(&lyrics_song(&song)).await;
+    }
+
+    /// The active lyrics as text with `[mm:ss.xx]` stamps, for Edit Lyrics.
+    pub fn editable_lyrics(&self, video_id: &str) -> String {
+        self.lyrics.editable_text(video_id)
+    }
+
+    /// Keeps `text` as the song's lyrics: edited (`provider` `None`) or picked in a search.
+    pub fn save_lyrics(&self, video_id: &str, text: &str, provider: Option<&str>) {
+        self.lyrics.save_custom(video_id, text, provider);
+    }
+
+    /// Every enabled provider's lyrics for `title` by `artist` (Search Lyrics).
+    pub async fn search_lyrics(
+        self: Arc<Self>,
+        title: String,
+        artist: String,
+        duration: f64,
+    ) -> Vec<LyricSearchResult> {
+        let query = LyricsQuery {
+            title,
+            artist,
+            album: None,
+            duration,
+        };
+        self.lyrics.manager.search_all(&query).await
     }
 
     /// The lyrics without timestamps, for the clipboard.

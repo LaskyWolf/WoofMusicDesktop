@@ -82,7 +82,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
 - [x] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
 - [x] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
-- [ ] Lyrics menu: Edit Lyrics and Search Lyrics sheets; karaoke fill inside the current word (`LyricsOptionsMenu`, `KaraokeLineText`)
+- [x] Lyrics menu: Edit Lyrics and Search Lyrics sheets; karaoke fill inside the current word (`LyricsOptionsMenu`, `KaraokeLineText`)
 - [ ] Share card looks: other backgrounds, frames and text styles, stickers, QR code, video (`ShareCardStudio`)
 - [x] Player settings: persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`, `NowPlaying`)
 - [x] Accent colour, library layout and gapless playback settings (`SettingsStore`)

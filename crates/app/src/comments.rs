@@ -783,7 +783,7 @@ fn small_icon<'a>(glyph: &'static [u8], size: f32, color: Color) -> Element<'a, 
 
 /// Opens a web link from a comment in the browser. Only http(s): a comment
 /// is anyone's text.
-fn open_link(url: &str) {
+pub(crate) fn open_link(url: &str) {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return;
     }
