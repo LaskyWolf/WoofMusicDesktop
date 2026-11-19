@@ -514,7 +514,7 @@ impl Comments {
                 icon: theme::SECONDARY,
                 placeholder: theme::SECONDARY,
                 value: theme::TEXT,
-                selection: theme::ACCENT,
+                selection: theme::accent(),
             });
         let send = button(ui::icon(icons::SEND, 18.0).opacity(if ready { 1.0_f32 } else { 0.4 }))
             .padding(9)
@@ -604,7 +604,7 @@ fn comment_row<'a>(
                     },
                     15.0,
                     if liked {
-                        theme::ACCENT
+                        theme::accent()
                     } else {
                         theme::SECONDARY
                     },
@@ -612,7 +612,7 @@ fn comment_row<'a>(
                 text(item.like_count_text.as_str())
                     .size(12)
                     .color(if liked {
-                        theme::ACCENT
+                        theme::accent()
                     } else {
                         theme::SECONDARY
                     }),
@@ -641,7 +641,7 @@ fn comment_row<'a>(
                     text(label)
                         .size(12)
                         .font(theme::weight(Weight::Medium))
-                        .color(theme::ACCENT),
+                        .color(theme::accent()),
                     small_icon(
                         if open {
                             icons::CHEVRON_UP
@@ -649,7 +649,7 @@ fn comment_row<'a>(
                             icons::CHEVRON_DOWN
                         },
                         12.0,
-                        theme::ACCENT,
+                        theme::accent(),
                     ),
                 ]
                 .spacing(4)
@@ -691,10 +691,10 @@ fn words(item: &CommentItem) -> Element<'_, Message> {
         .map(|run| match run {
             CommentTextRun::Text(text) => text::Span::new(text.as_str()),
             CommentTextRun::Link { text, url } => text::Span::new(text.as_str())
-                .color(theme::ACCENT)
+                .color(theme::accent())
                 .link(Msg::OpenLink(url.clone())),
             CommentTextRun::Timestamp { text, seconds, .. } => text::Span::new(text.as_str())
-                .color(theme::ACCENT)
+                .color(theme::accent())
                 .link(Msg::Seek(*seconds)),
         })
         .collect();
@@ -759,7 +759,7 @@ fn link_button<'a>(label: &'a str, on_press: Message) -> Element<'a, Message> {
         text(label)
             .size(12)
             .font(theme::weight(Weight::Medium))
-            .color(theme::ACCENT),
+            .color(theme::accent()),
     )
     .padding([4, 6])
     .on_press(on_press)

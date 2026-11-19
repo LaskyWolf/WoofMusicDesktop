@@ -50,6 +50,8 @@ struct Shared {
     loudness: Option<f64>,
     /// Swift `persistentPlayPause`: a song picked while paused stays paused.
     persistent_play_pause: bool,
+    /// Swift `gaplessPlayback`: mpv's `gapless-audio`.
+    gapless: bool,
     /// The speed songs load at (Swift `PlaybackSpeed.rate`).
     speed: f64,
     /// While true, the outgoing song's end finishes the crossfade instead of
@@ -148,6 +150,7 @@ impl PlayerController {
             normalization: false,
             loudness: None,
             persistent_play_pause: false,
+            gapless: true,
             speed: 1.0,
             is_crossfading: false,
             events: DeckEvents::default(),
@@ -383,6 +386,14 @@ impl PlayerController {
         self.refilter();
     }
 
+    /// Swift `applyPlaybackSettings`' `gapless-audio`; the next song loads with it.
+    pub fn set_gapless(&self, on: bool) {
+        lock(&self.shared).gapless = on;
+        let _ = self
+            .active_deck()
+            .set("gapless-audio", if on { "yes" } else { "no" });
+    }
+
     pub fn set_persistent_play_pause(&self, on: bool) {
         lock(&self.shared).persistent_play_pause = on;
     }
@@ -428,23 +439,31 @@ impl PlayerController {
         echo_delay: Option<f64>,
         loudness: Option<f64>,
     ) {
-        let (has_bass, has_effects, equalizer, gain) = {
+        let (has_bass, has_effects, equalizer, gain, gapless) = {
             let shared = lock(&self.shared);
             (
                 shared.has_bass_filter,
                 shared.has_effect_filters,
                 shared.equalizer.clone(),
                 normalization_gain(loudness).filter(|_| shared.normalization),
+                shared.gapless,
             )
         };
+        let _ = deck.set("gapless-audio", if gapless { "yes" } else { "no" });
         let tiers = [(true, true), (false, true), (true, false), (false, false)]
             .into_iter()
             .filter(|(bass, effects)| (has_bass || !bass) && (has_effects || !effects));
         let mut accepted = (false, false);
         let mut failure = None;
         for (bass, effects) in tiers {
-            let chain =
-                filter_chain(bass_gain, echo_delay, bass, effects, equalizer.as_deref(), gain);
+            let chain = filter_chain(
+                bass_gain,
+                echo_delay,
+                bass,
+                effects,
+                equalizer.as_deref(),
+                gain,
+            );
             match deck.set("af", &chain) {
                 Ok(()) => {
                     accepted = (bass, effects);

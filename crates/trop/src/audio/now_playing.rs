@@ -207,7 +207,9 @@ impl Queue {
             index,
             is_shuffle_on: saved.is_shuffle_on,
             is_repeat_on: false,
-            play_next_end: saved.play_next_end.filter(|end| *end > index && *end <= last),
+            play_next_end: saved
+                .play_next_end
+                .filter(|end| *end > index && *end <= last),
             original: None,
         })
     }

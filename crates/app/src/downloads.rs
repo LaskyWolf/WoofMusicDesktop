@@ -170,7 +170,7 @@ pub fn bar_button<'a>(downloads: &Downloads, song: &SongItem) -> Element<'a, Mes
     let (content, message, tip): (Element<'a, Message>, _, String) =
         if downloads.saved.contains(&song.video_id) {
             (
-                tinted(icons::SAVED, 20.0, theme::ACCENT),
+                tinted(icons::SAVED, 20.0, theme::accent()),
                 open,
                 "Downloaded. Show Downloads".to_owned(),
             )
@@ -180,7 +180,7 @@ pub fn bar_button<'a>(downloads: &Downloads, song: &SongItem) -> Element<'a, Mes
                     text(percent(*progress))
                         .size(11)
                         .font(theme::weight(Weight::Bold))
-                        .color(theme::ACCENT)
+                        .color(theme::accent())
                         .into(),
                     open,
                     "Downloading. Show Downloads".to_owned(),
@@ -301,7 +301,7 @@ fn active_row<'a>(covers: &'a Covers, download: &'a ActiveDownload) -> Element<'
                 .girth(4)
                 .style(|_| progress_bar::Style {
                     background: Background::Color(theme::PRESSED),
-                    bar: Background::Color(theme::ACCENT),
+                    bar: Background::Color(theme::accent()),
                     border: Border::default().rounded(2),
                 })
                 .into(),

@@ -283,7 +283,11 @@ fn radio_items<'a>(options: &RadioOptions) -> Vec<Element<'a, Message>> {
     let step = |icon, limit: usize| {
         let enabled = (5..=50).contains(&limit);
         button(ui::icon(icon, 16.0).style(move |_, _| svg::Style {
-            color: Some(if enabled { theme::TEXT } else { theme::SECONDARY }),
+            color: Some(if enabled {
+                theme::TEXT
+            } else {
+                theme::SECONDARY
+            }),
         }))
         .padding(6)
         .on_press_maybe(enabled.then_some(Message::MenuAction(Action::RadioLimit(limit))))
@@ -308,7 +312,16 @@ fn radio_items<'a>(options: &RadioOptions) -> Vec<Element<'a, Message>> {
         step(icons::PLUS, options.limit + 5),
     ]
     .align_y(Alignment::Center);
-    items.push(container(tracks).center_y(ITEM).padding(Padding { left: 10.0, right: 4.0, ..Padding::ZERO }).into());
+    items.push(
+        container(tracks)
+            .center_y(ITEM)
+            .padding(Padding {
+                left: 10.0,
+                right: 4.0,
+                ..Padding::ZERO
+            })
+            .into(),
+    );
     items.push(checked(
         "Include explicit",
         Action::RadioExplicit(!options.allow_explicit),
@@ -323,7 +336,7 @@ fn checked<'a>(label: &str, action: Action, on: bool) -> Element<'a, Message> {
     let mark: Element<'a, Message> = if on {
         ui::icon(icons::CHECK, 18.0)
             .style(|_, _| svg::Style {
-                color: Some(theme::ACCENT),
+                color: Some(theme::accent()),
             })
             .into()
     } else {

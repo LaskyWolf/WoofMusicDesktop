@@ -2,10 +2,10 @@
 //! Swift's defaults and `UserDefaults` keys. Missing keys read as the defaults.
 //! The transition settings live in `audio::crossfade::TransitionSettings`.
 //!
-//! Not ported: theme mode, accent colour and the left-handed tab bar
-//! (the desktop app has one dark look and no tab bar), player style, library
-//! layout, equalizer, gapless, artwork swipe, Listen Together, downloads,
-//! translation, incognito and search history.
+//! Not ported: theme mode and the left-handed tab bar (the desktop app has
+//! one dark look and no tab bar), player style, artwork swipe, Listen
+//! Together, downloads, translation, incognito and search history. The
+//! equalizer lives in `audio::now_playing::PlayerDefaults`.
 
 use std::path::{Path, PathBuf};
 
@@ -34,6 +34,26 @@ impl LyricsAlignment {
             Self::Left => "Left",
             Self::Center => "Center",
             Self::Right => "Right",
+        }
+    }
+}
+
+/// How Library shows playlists, albums, artists and podcasts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryLayout {
+    #[default]
+    Grid,
+    List,
+}
+
+impl LibraryLayout {
+    pub const ALL: [Self; 2] = [Self::Grid, Self::List];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Grid => "Grid",
+            Self::List => "List",
         }
     }
 }
@@ -77,6 +97,11 @@ pub const DEFAULT_TABS: [&str; 4] = ["Home", "Library", "Explore", "Search"];
 #[serde(default)]
 pub struct SettingsStore {
     // Appearance
+    /// The name of an accent preset; the app keeps the colours.
+    #[serde(rename = "settings.accentName")]
+    pub accent_name: String,
+    #[serde(rename = "settings.libraryLayout")]
+    pub library_layout: LibraryLayout,
     #[serde(rename = "settings.playerBackgroundStyle")]
     pub player_background_style: PlayerBackgroundStyle,
     /// Index into `DEFAULT_TABS`.
@@ -103,6 +128,8 @@ pub struct SettingsStore {
     pub audio_quality: AudioQuality,
     #[serde(rename = "settings.audioNormalization")]
     pub audio_normalization: bool,
+    #[serde(rename = "settings.gaplessPlayback")]
+    pub gapless_playback: bool,
     /// A song picked while paused stays paused.
     #[serde(rename = "settings.persistentPlayPause")]
     pub persistent_play_pause: bool,
@@ -156,6 +183,8 @@ pub struct SettingsStore {
 impl Default for SettingsStore {
     fn default() -> Self {
         Self {
+            accent_name: "Default".to_owned(),
+            library_layout: LibraryLayout::Grid,
             player_background_style: PlayerBackgroundStyle::Dynamic,
             default_tab: 0,
             lyrics_alignment: LyricsAlignment::Center,
@@ -165,6 +194,7 @@ impl Default for SettingsStore {
             karaoke_greeting_count: 0,
             audio_quality: AudioQuality::Auto,
             audio_normalization: false,
+            gapless_playback: true,
             persistent_play_pause: false,
             autoplay_similar: true,
             persist_queue: false,

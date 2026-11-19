@@ -35,7 +35,6 @@ use iced::{
 use swiftytube::streaming::stream_cache::StreamCache;
 use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
 use trop::audio::now_playing::{PlayerDefaults, Queue, SavedQueue};
-use trop::services::personalization_service::RadioOptions;
 use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::player_controller::player_controller::State as PlayState;
 use trop::audio::sleep_timer::SleepTimer;
@@ -48,6 +47,7 @@ use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem}
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::playback::episode_playback_store::{self, EpisodePlaybackStore};
 use trop::search::search_parser::SearchSection;
+use trop::services::personalization_service::RadioOptions;
 
 use pages::LibraryFilter;
 use services::{Artwork, Library, Lyrics, Services};
@@ -302,6 +302,7 @@ struct App {
     /// The current song's lyrics, with its video id; fetched as each song starts.
     lyrics: Option<(String, Load<Arc<Lyrics>>)>,
     queue_list: virtual_list::State,
+    queue_drag: Option<now_playing::QueueDrag>,
     /// The current song's large cover and colours, with its video id.
     artwork: Option<(String, Artwork)>,
     /// Counts how long each song plays, for My Top 100 and history.
@@ -437,6 +438,12 @@ pub enum Message {
     /// A lyric line was clicked: the song jumps to where it starts.
     SeekTo(f64),
     QueueScrolled(scrollable::Viewport),
+    /// The grip of this queue song was pressed.
+    QueueDrag(usize),
+    /// The cursor moved to this height in the queue list during a drag.
+    QueueDragMove(f32),
+    /// The mouse button came up: the dragged song lands.
+    QueueDrop,
     /// Escape: close the queue, then Now Playing.
     Dismiss,
     Snapshot(window::Screenshot),
@@ -524,6 +531,7 @@ impl App {
             lyrics_open: std::env::var("WOOF_LYRICS").is_ok(),
             lyrics: None,
             queue_list: virtual_list::State::default(),
+            queue_drag: None,
             artwork: None,
             plays: PlaybackStateService::default(),
             report: None,
@@ -1055,7 +1063,12 @@ impl App {
                             player.set_speed(self.speed.select(&song.video_id, is_episode(song)));
                         }
                         player
-                            .play(&url, video_id.as_deref(), self.player.resume_at.take(), loudness)
+                            .play(
+                                &url,
+                                video_id.as_deref(),
+                                self.player.resume_at.take(),
+                                loudness,
+                            )
                             .err()
                             .map(|error| error.to_string())
                     }
@@ -1064,10 +1077,12 @@ impl App {
                 // Dev aid: WOOF_MENU=1 opens the playing song's menu;
                 // =radio and =new-playlist open those pages of it.
                 let menu = match std::env::var("WOOF_MENU").as_deref() {
-                    Ok("radio") => Task::done(Message::MoreMenu)
-                        .chain(Task::done(Message::MenuAction(song_menu::Action::StartRadio))),
-                    Ok("new-playlist") => Task::done(Message::MoreMenu)
-                        .chain(Task::done(Message::MenuAction(song_menu::Action::NewPlaylist))),
+                    Ok("radio") => Task::done(Message::MoreMenu).chain(Task::done(
+                        Message::MenuAction(song_menu::Action::StartRadio),
+                    )),
+                    Ok("new-playlist") => Task::done(Message::MoreMenu).chain(Task::done(
+                        Message::MenuAction(song_menu::Action::NewPlaylist),
+                    )),
                     Ok(_) => Task::done(Message::MoreMenu),
                     Err(_) => Task::none(),
                 };
@@ -1189,6 +1204,27 @@ impl App {
             }
             Message::QueueScrolled(viewport) => {
                 self.queue_list.update(viewport);
+                Task::none()
+            }
+            Message::QueueDrag(index) => {
+                self.queue_drag = Some(now_playing::QueueDrag {
+                    from: index,
+                    to: index,
+                });
+                Task::none()
+            }
+            Message::QueueDragMove(y) => {
+                let len = self.player.queue.songs.len();
+                if let Some(drag) = &mut self.queue_drag {
+                    // ponytail: no auto-scroll at the panel's edges; scroll with the wheel while dragging.
+                    drag.to = now_playing::QueueDrag::row_at(y, &self.queue_list, len);
+                }
+                Task::none()
+            }
+            Message::QueueDrop => {
+                if let Some(drag) = self.queue_drag.take() {
+                    self.player.queue.move_song(drag.from, drag.to);
+                }
                 Task::none()
             }
             Message::Dismiss => {
@@ -1456,7 +1492,9 @@ impl App {
         }
         let video_id = song.video_id.clone();
         Task::perform(
-            self.services.clone().radio(video_id.clone(), RadioOptions::default()),
+            self.services
+                .clone()
+                .radio(video_id.clone(), RadioOptions::default()),
             move |result| Message::AutoplayRadio(video_id, result),
         )
     }
@@ -1979,6 +2017,15 @@ impl App {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(every)).map(|_| Message::Tick));
         }
+        if self.queue_drag.is_some() {
+            // The drop lands wherever the button comes up, even outside the panel.
+            subscriptions.push(iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::QueueDrop),
+                _ => None,
+            }));
+        }
         if self.downloads.running() {
             subscriptions.push(
                 iced::time::every(Duration::from_millis(300))
@@ -2053,6 +2100,7 @@ impl App {
                 &self.queue_list,
                 &self.player.queue.songs,
                 self.player.queue.index,
+                self.queue_drag,
             ));
         }
         let mut layers = layers
@@ -2102,6 +2150,7 @@ impl App {
                         self.library_filter,
                         self.syncing,
                         &self.playlist_edit,
+                        self.settings.prefs.library_layout,
                     ),
                     Some(Load::Failed(error)) => ui::status(Some(error), Message::Retry),
                     _ => ui::status(None, Message::Retry),
@@ -2662,7 +2711,7 @@ fn sidebar<'a>(
             )
             .padding([1, 7])
             .style(|_| container::Style {
-                background: Some(Background::Color(theme::ACCENT)),
+                background: Some(Background::Color(theme::accent())),
                 border: Border::default().rounded(9),
                 ..container::Style::default()
             })
@@ -2831,6 +2880,7 @@ mod tests {
             lyrics_open: false,
             lyrics: None,
             queue_list: virtual_list::State::default(),
+            queue_drag: None,
             artwork: None,
             plays: PlaybackStateService::default(),
             transitions: None,

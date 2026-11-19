@@ -140,9 +140,11 @@ impl Services {
         self.client.update_locale(YouTubeLocale::new(gl, hl));
         *self.lyrics.manager.settings.lock().unwrap() = settings.lyrics_settings();
         self.sync.set_options(settings.sync_options());
+        crate::theme::set_accent(&settings.accent_name);
         if let Some(player) = &self.player {
             player.set_normalization(settings.audio_normalization);
             player.set_persistent_play_pause(settings.persistent_play_pause);
+            player.set_gapless(settings.gapless_playback);
         }
         *self.settings.write().unwrap() = settings.clone();
     }
@@ -453,7 +455,10 @@ impl Services {
     /// A playable stream URL: VISIONOS first, cipher clients after.
     /// A downloaded song plays its saved file instead.
     /// The stream URL and its loudness (dB) for Audio Normalization.
-    pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<(String, Option<f64>), String> {
+    pub async fn resolve(
+        self: Arc<Self>,
+        video_id: String,
+    ) -> Result<(String, Option<f64>), String> {
         let this = self.clone();
         let id = video_id.clone();
         if let Some(Some(path)) = blocking(move || this.downloads.local_path(&id)).await {

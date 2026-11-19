@@ -6,8 +6,8 @@ use std::sync::Arc;
 use iced::font::Weight;
 use iced::gradient::Linear;
 use iced::widget::{
-    Column, Space, button, column, container, image, progress_bar, responsive, rich_text, row,
-    scrollable, text,
+    Column, Space, button, column, container, image, mouse_area, progress_bar, responsive,
+    rich_text, row, scrollable, text,
 };
 use iced::{
     Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Radians, Shadow,
@@ -23,8 +23,39 @@ use crate::{Load, Message, Route, theme, title_bar, virtual_list};
 
 pub const QUEUE_WIDTH: f32 = 360.0;
 pub const QUEUE_SCROLL: &str = "queue";
-/// Text width of a queue row: the panel minus padding, cover, gaps and the length.
-const QUEUE_TEXT: f32 = QUEUE_WIDTH - 140.0;
+/// Text width of a queue row: the panel minus padding, cover, gaps, the length and the grip.
+const QUEUE_TEXT: f32 = QUEUE_WIDTH - 168.0;
+const GRIP_WIDTH: f32 = 28.0;
+
+/// A song dragged by its grip in the queue panel (Swift `QueueView.onMove`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueDrag {
+    pub from: usize,
+    /// Where it would land, in the queue before the move.
+    pub to: usize,
+}
+
+impl QueueDrag {
+    /// The song shown at row `row` while the dragged one sits at `to`.
+    pub fn song_at(&self, row: usize) -> usize {
+        let (from, to) = (self.from, self.to);
+        if row == to {
+            from
+        } else if from < to && (from..to).contains(&row) {
+            row + 1
+        } else if from > to && (to + 1..=from).contains(&row) {
+            row - 1
+        } else {
+            row
+        }
+    }
+
+    /// The row under `y`, measured from the top of the list.
+    pub fn row_at(y: f32, state: &virtual_list::State, len: usize) -> usize {
+        let row = ((y + state.offset_y) / ui::TRACK_ROW).max(0.0) as usize;
+        row.min(len.saturating_sub(1))
+    }
+}
 
 /// Room the title, artists and album take under the cover.
 const INFO_HEIGHT: f32 = 120.0;
@@ -441,6 +472,7 @@ pub fn queue<'a>(
     state: &virtual_list::State,
     songs: &Arc<Vec<SongItem>>,
     current: usize,
+    drag: Option<QueueDrag>,
 ) -> Element<'a, Message> {
     let header = row![
         text("Queue").size(18).font(theme::weight(Weight::Bold)),
@@ -462,9 +494,10 @@ pub fn queue<'a>(
             songs.len(),
             ui::TRACK_ROW,
             Padding::from([0, 8]).bottom(8),
-            move |index| {
+            move |row| {
+                let index = drag.map_or(row, |drag| drag.song_at(row));
                 let subtitle = ui::artists(&songs[index].artists);
-                ui::track_row(
+                let track = ui::track_row(
                     covers,
                     &songs,
                     index,
@@ -472,11 +505,39 @@ pub fn queue<'a>(
                     index == current,
                     subtitle,
                     Some(QUEUE_TEXT),
+                );
+                let grip = mouse_area(
+                    container(
+                        ui::icon(icons::GRIP, 16.0).style(|_, _| iced::widget::svg::Style {
+                            color: Some(theme::SECONDARY),
+                        }),
+                    )
+                    .center(GRIP_WIDTH)
+                    .height(ui::TRACK_ROW),
                 )
+                .on_press(Message::QueueDrag(index))
+                .interaction(iced::mouse::Interaction::Grab);
+                let lifted = drag.is_some_and(|drag| drag.from == index);
+                container(
+                    row![container(track).width(Length::Fill), grip].align_y(Alignment::Center),
+                )
+                .style(move |_| container::Style {
+                    background: lifted.then_some(Background::Color(theme::PRESSED)),
+                    border: Border::default().rounded(8),
+                    ..container::Style::default()
+                })
+                .into()
             },
             Message::QueueScrolled,
         )
     };
+    // Always a mouse area, so the list keeps its scroll position when a drag starts.
+    let mut list = mouse_area(list);
+    if drag.is_some() {
+        list = list
+            .on_move(|point| Message::QueueDragMove(point.y))
+            .interaction(iced::mouse::Interaction::Grabbing);
+    }
     container(ui::glass_panel(
         3,
         22.0,
@@ -492,4 +553,30 @@ pub fn queue<'a>(
     })
     .align_right(Length::Fill)
     .into()
+}
+
+mod icons {
+    /// Three lines, the reorder grip of a list row.
+    pub const GRIP: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>"##;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueueDrag;
+
+    /// The rows show the order the queue will have after the drop.
+    #[test]
+    fn a_drag_previews_the_moved_order() {
+        let order = |from, to| -> Vec<usize> {
+            let drag = QueueDrag { from, to };
+            (0..5).map(|row| drag.song_at(row)).collect()
+        };
+        assert_eq!(order(1, 3), [0, 2, 3, 1, 4]);
+        assert_eq!(order(3, 1), [0, 3, 1, 2, 4]);
+        assert_eq!(order(2, 2), [0, 1, 2, 3, 4]);
+        let mut queue = vec![0, 1, 2, 3, 4];
+        let song = queue.remove(1);
+        queue.insert(3, song);
+        assert_eq!(queue, order(1, 3), "matches Queue::move_song");
+    }
 }

@@ -14,7 +14,8 @@ use trop::audio::crossfade::TransitionSettings;
 use trop::audio::lyrics::lyrics_manager::LyricsProviderRegistry;
 use trop::odesli::odesli_defaults::OdesliDefaults;
 use trop::settings::settings_store::{
-    AUDIO_QUALITIES, COUNTRIES, DEFAULT_TABS, LyricsAlignment, PlayerBackgroundStyle, SettingsStore,
+    AUDIO_QUALITIES, COUNTRIES, DEFAULT_TABS, LibraryLayout, LyricsAlignment,
+    PlayerBackgroundStyle, SettingsStore,
 };
 
 use crate::integrations::{self, Action, Status};
@@ -352,7 +353,43 @@ impl State {
 
     fn appearance(&self) -> Element<'_, crate::Message> {
         let prefs = &self.prefs;
+        let swatches = theme::ACCENTS.iter().map(|&(name, color)| {
+            // An unknown saved name shows the default as chosen, as it is applied.
+            let chosen = theme::accent() == color;
+            let mark: Element<'_, crate::Message> = if chosen {
+                ui::icon(CHECK, 16.0).into()
+            } else {
+                Space::new().into()
+            };
+            button(container(mark).center(34))
+                .padding(0)
+                .on_press(self.set(|p| p.accent_name = name.to_owned()))
+                .style(move |_, status| button::Style {
+                    background: Some(Background::Color(color)),
+                    border: Border::default().rounded(17).width(2).color(
+                        if status == button::Status::Hovered {
+                            theme::TEXT
+                        } else {
+                            Color::TRANSPARENT
+                        },
+                    ),
+                    ..button::Style::default()
+                })
+                .into()
+        });
+        let accents = container(
+            iced::widget::Row::with_children(swatches)
+                .spacing(14)
+                .wrap()
+                .vertical_spacing(14),
+        )
+        .padding([16, 18]);
         sections(vec![
+            (
+                "Accent Color",
+                "Applies to buttons, highlights, and selected items.",
+                group(vec![accents.into()]),
+            ),
             (
                 "Player",
                 "Album Art spreads the cover's colours behind Now Playing. Solid uses one colour from the cover.",
@@ -363,6 +400,20 @@ impl State {
                             style.display_name(),
                             prefs.player_background_style == style,
                             self.set(|p| p.player_background_style = style),
+                        )
+                    })),
+                )]),
+            ),
+            (
+                "Library",
+                "",
+                group(vec![plain(
+                    "Library Layout",
+                    segmented(LibraryLayout::ALL.map(|layout| {
+                        (
+                            layout.display_name(),
+                            prefs.library_layout == layout,
+                            self.set(|p| p.library_layout = layout),
                         )
                     })),
                 )]),
@@ -438,6 +489,10 @@ impl State {
                 self.toggle(self.prefs.audio_normalization, |p, on| {
                     p.audio_normalization = on
                 }),
+            ),
+            plain(
+                "Gapless Playback",
+                self.toggle(self.prefs.gapless_playback, |p, on| p.gapless_playback = on),
             ),
         ]);
         let queue = group(vec![
@@ -957,7 +1012,7 @@ pub(crate) fn toggle<'a>(
                     | toggler::Status::Hovered { is_toggled: true }
             );
             toggler::Style {
-                background: Background::Color(if on { theme::ACCENT } else { theme::PRESSED }),
+                background: Background::Color(if on { theme::accent() } else { theme::PRESSED }),
                 foreground: Background::Color(if on { theme::BACKGROUND } else { theme::TEXT }),
                 background_border_width: 0.0,
                 foreground_border_width: 0.0,

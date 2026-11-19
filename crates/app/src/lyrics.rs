@@ -496,7 +496,7 @@ impl State {
         .align_y(Alignment::Center);
         if offset != 0.0 {
             offset_title = offset_title.push(
-                button(text("Reset").size(13).color(theme::ACCENT))
+                button(text("Reset").size(13).color(theme::accent()))
                     .padding([2, 6])
                     .on_press(set_offset(0.0))
                     .style(|_, _| button::Style::default()),
@@ -598,7 +598,11 @@ fn switch_row<'a>(
                         | toggler::Status::Hovered { is_toggled: true }
                 );
                 toggler::Style {
-                    background: Background::Color(if on { theme::ACCENT } else { theme::PRESSED }),
+                    background: Background::Color(if on {
+                        theme::accent()
+                    } else {
+                        theme::PRESSED
+                    }),
                     foreground: Background::Color(if on { theme::BACKGROUND } else { theme::TEXT }),
                     background_border_width: 0.0,
                     foreground_border_width: 0.0,
@@ -740,7 +744,7 @@ fn picker(composer: &Composer) -> Element<'_, Msg> {
             }))
             .center(22)
             .style(|_| container::Style {
-                background: Some(Background::Color(theme::ACCENT)),
+                background: Some(Background::Color(theme::accent())),
                 border: Border::default().rounded(11),
                 ..container::Style::default()
             })

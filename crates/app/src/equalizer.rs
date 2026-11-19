@@ -123,7 +123,7 @@ fn preset_row<'a>(name: &'a str, selected: bool, message: Option<Message>) -> El
     let check: Element<'a, Message> = if selected {
         ui::icon(crate::song_menu::icons::CHECK, 18.0)
             .style(|_, _| svg::Style {
-                color: Some(theme::ACCENT),
+                color: Some(theme::accent()),
             })
             .into()
     } else {

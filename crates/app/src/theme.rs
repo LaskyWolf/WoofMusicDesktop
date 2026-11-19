@@ -1,5 +1,7 @@
 //! Colours and sizes, taken from the WoofMusic identity (same values as the Flutter build).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use iced::font::{Family, Weight};
 use iced::widget::scrollable;
 use iced::{Background, Border, Color, Font, Theme};
@@ -11,9 +13,44 @@ pub const HOVER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
 pub const CLOSE: Color = rgb(0xE5, 0x48, 0x4D);
 pub const CLOSE_PRESSED: Color = rgb(0xC4, 0x36, 0x3B);
-/// WoofMusic teal: the playing song, focus rings, the Play button.
-pub const ACCENT: Color = rgb(0x45, 0xBF, 0xB3);
-pub const ACCENT_HOVER: Color = rgb(0x5C, 0xD1, 0xC5);
+/// Swift `AccentPreset.all`, with WoofMusic teal as the default in place of
+/// Swift's Default Blue (which stays as Blue).
+pub const ACCENTS: [(&str, Color); 13] = [
+    ("Default", rgb(0x45, 0xBF, 0xB3)),
+    ("Blue", Color::from_rgb(0.0, 0.48, 1.0)),
+    ("Red", Color::from_rgb(0.91, 0.22, 0.22)),
+    ("Orange", Color::from_rgb(0.95, 0.45, 0.13)),
+    ("Amber", Color::from_rgb(0.98, 0.70, 0.15)),
+    ("Green", Color::from_rgb(0.18, 0.72, 0.32)),
+    ("Teal", Color::from_rgb(0.12, 0.65, 0.60)),
+    ("Cyan", Color::from_rgb(0.15, 0.70, 0.90)),
+    ("Purple", Color::from_rgb(0.60, 0.35, 0.90)),
+    ("Pink", Color::from_rgb(0.94, 0.35, 0.66)),
+    ("Indigo", Color::from_rgb(0.33, 0.40, 0.95)),
+    ("Lime", Color::from_rgb(0.55, 0.75, 0.20)),
+    ("Brown", Color::from_rgb(0.62, 0.43, 0.30)),
+];
+
+/// Index into `ACCENTS` of the chosen accent.
+static ACCENT_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+/// The accent picked in Settings: the playing song, focus rings, the Play button.
+pub fn accent() -> Color {
+    ACCENTS[ACCENT_INDEX.load(Ordering::Relaxed)].1
+}
+
+/// The accent a little lighter, under the pointer.
+pub fn accent_hover() -> Color {
+    let c = accent();
+    let lift = |v: f32| v + (1.0 - v) * 0.12;
+    Color::from_rgb(lift(c.r), lift(c.g), lift(c.b))
+}
+
+/// Picks the accent named `name`; an unknown name picks the default.
+pub fn set_accent(name: &str) {
+    let index = ACCENTS.iter().position(|(n, _)| *n == name).unwrap_or(0);
+    ACCENT_INDEX.store(index, Ordering::Relaxed);
+}
 /// Cover placeholder while the image downloads.
 pub const PLACEHOLDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
 /// Dark tint over the glass, so white text on it keeps its contrast.

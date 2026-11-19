@@ -687,7 +687,7 @@ fn people_list<'a>(
         .spacing(12)
         .align_y(Alignment::Center);
         if person.is_owner {
-            line = line.push(text("Owner").size(12).color(theme::ACCENT));
+            line = line.push(text("Owner").size(12).color(theme::accent()));
         }
         let open = person
             .channel_id

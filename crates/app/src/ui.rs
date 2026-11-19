@@ -192,7 +192,11 @@ pub fn song_cell<'a>(
 
 /// Teal for the playing song's title, white otherwise.
 fn title_color(playing: bool) -> Color {
-    if playing { theme::ACCENT } else { theme::TEXT }
+    if playing {
+        theme::accent()
+    } else {
+        theme::TEXT
+    }
 }
 
 /// Height of a `track_row`.
@@ -221,7 +225,7 @@ pub fn track_row<'a>(
         cover(covers, song.thumbnail_url.as_deref(), 40.0, 6.0)
     } else {
         container(text((index + 1).to_string()).size(14).color(if playing {
-            theme::ACCENT
+            theme::accent()
         } else {
             theme::SECONDARY
         }))
@@ -489,12 +493,12 @@ pub fn accent_button<'a>(
         .on_press_maybe(message)
         .style(|_, status| button::Style {
             background: Some(Background::Color(match status {
-                button::Status::Hovered => theme::ACCENT_HOVER,
+                button::Status::Hovered => theme::accent_hover(),
                 button::Status::Disabled => Color {
                     a: 0.4,
-                    ..theme::ACCENT
+                    ..theme::accent()
                 },
-                _ => theme::ACCENT,
+                _ => theme::accent(),
             })),
             border: Border::default().rounded(22),
             text_color: theme::BACKGROUND,
@@ -510,7 +514,7 @@ pub fn field_style(_: &iced::Theme, status: text_input::Status) -> text_input::S
         border: Border::default().rounded(14).width(1).color(match status {
             text_input::Status::Focused { .. } => Color {
                 a: 0.6,
-                ..theme::ACCENT
+                ..theme::accent()
             },
             _ => theme::HOVER,
         }),
@@ -519,7 +523,7 @@ pub fn field_style(_: &iced::Theme, status: text_input::Status) -> text_input::S
         value: theme::TEXT,
         selection: Color {
             a: 0.4,
-            ..theme::ACCENT
+            ..theme::accent()
         },
     }
 }

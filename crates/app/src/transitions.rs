@@ -160,7 +160,12 @@ impl Transitions {
         for (name, value) in crossfade::incoming_properties(plan) {
             let _ = deck.set(name, &value);
         }
-        player.apply_filters(&deck, plan.incoming_bass_gain(), plan.echo_delay, plan.loudness);
+        player.apply_filters(
+            &deck,
+            plan.incoming_bass_gain(),
+            plan.echo_delay,
+            plan.loudness,
+        );
         let _ = deck.command("loadfile", &[&plan.url, "replace"]);
     }
 

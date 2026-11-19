@@ -19,6 +19,7 @@ use crate::playlist_edit;
 use crate::services::Library;
 use crate::ui::{self, Covers};
 use crate::{Load, Message, Route, theme};
+use trop::settings::settings_store::LibraryLayout;
 
 pub const SEARCH_INPUT: &str = "search";
 
@@ -82,7 +83,7 @@ fn moods<'a>(title: &'a str, moods: &'a [MoodItem]) -> Element<'a, Message> {
         let color = mood
             .color
             .map(|rgb| Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
-            .unwrap_or(theme::ACCENT);
+            .unwrap_or(theme::accent());
         let swatch = container(Space::new())
             .width(4)
             .height(22)
@@ -484,6 +485,7 @@ pub fn library<'a>(
     filter: Option<LibraryFilter>,
     syncing: bool,
     edit: &'a playlist_edit::State,
+    layout: LibraryLayout,
 ) -> Element<'a, Message> {
     let chips = row(LibraryFilter::ALL.map(|(chip, label)| {
         let selected = filter == Some(chip);
@@ -551,7 +553,7 @@ pub fn library<'a>(
     ];
     for (kind, title, items) in sections {
         if filter.is_none_or(|filter| filter == kind) && !items.is_empty() {
-            page.push(library_section(covers, title, items));
+            page.push(library_section(covers, title, items, layout));
         }
     }
     if page.len() == 1 {
@@ -573,11 +575,17 @@ fn library_section<'a>(
     covers: &'a Covers,
     title: &'a str,
     items: &'a [(YTItem, String)],
+    layout: LibraryLayout,
 ) -> Element<'a, Message> {
     let no_songs = Arc::new(Vec::new());
-    let tiles = items
-        .iter()
-        .map(|(item, subtitle)| ui::tile(covers, item, subtitle.clone(), &no_songs, false));
+    let tiles = items.iter().map(|(item, subtitle)| match layout {
+        LibraryLayout::Grid => ui::tile(covers, item, subtitle.clone(), &no_songs, false),
+        LibraryLayout::List => list_row(covers, item, subtitle, &no_songs),
+    });
+    let (spacing, vertical) = match layout {
+        LibraryLayout::Grid => (20, 24),
+        LibraryLayout::List => (12, 4),
+    };
     column![
         row![
             ui::section_title(title),
@@ -586,12 +594,57 @@ fn library_section<'a>(
         ]
         .align_y(Alignment::Center),
         iced::widget::Row::with_children(tiles)
-            .spacing(20)
+            .spacing(spacing)
             .wrap()
-            .vertical_spacing(24),
+            .vertical_spacing(vertical),
     ]
     .spacing(14)
     .into()
+}
+
+/// Swift `MediaListRow` in the Library's List layout: a small cover, the
+/// title and its subtitle. Rows wrap into columns on a wide window.
+fn list_row<'a>(
+    covers: &'a Covers,
+    item: &'a YTItem,
+    subtitle: &str,
+    songs: &Arc<Vec<SongItem>>,
+) -> Element<'a, Message> {
+    const WIDTH: f32 = 340.0;
+    const ART: f32 = 52.0;
+    let round = matches!(item, YTItem::Artist(_));
+    let text_width = WIDTH - ART - 14.0 - 16.0;
+    // Swift names the kind when the library stores nothing else.
+    let subtitle = match (subtitle, item) {
+        ("", YTItem::Playlist(_)) => "Playlist",
+        ("", YTItem::Album(_)) => "Album",
+        ("", YTItem::Artist(_)) => "Artist",
+        ("", YTItem::Podcast(_)) => "Podcast",
+        (subtitle, _) => subtitle,
+    };
+    let content = row![
+        ui::cover(
+            covers,
+            item.thumbnail_url(),
+            ART,
+            if round { ART / 2.0 } else { 8.0 }
+        ),
+        column![
+            text(ui::fit(item.title(), text_width, 15.0))
+                .size(15)
+                .font(theme::weight(Weight::Medium))
+                .wrapping(text::Wrapping::None),
+            text(ui::fit(subtitle, text_width, 13.0))
+                .size(13)
+                .color(theme::SECONDARY)
+                .wrapping(text::Wrapping::None),
+        ]
+        .spacing(2),
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center)
+    .width(WIDTH - 16.0);
+    ui::clickable(content, ui::open(item, songs), 8.0)
 }
 
 /// Swift `shortcutTile`: a card in the list's colour, its first two covers
@@ -816,7 +869,7 @@ pub fn activity<'a>(
                         .width(10)
                         .height(10)
                         .style(|_| container::Style {
-                            background: Some(Background::Color(theme::ACCENT)),
+                            background: Some(Background::Color(theme::accent())),
                             border: Border::default().rounded(5),
                             ..container::Style::default()
                         })
