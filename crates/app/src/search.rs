@@ -140,7 +140,8 @@ impl State {
                 })
             }
             Msg::Suggest(typed) => {
-                if typed != self.typed {
+                // Incognito may have been switched on while the pause ran.
+                if typed != self.typed || prefs.is_incognito {
                     return Task::none();
                 }
                 let query = self.query.trim().to_owned();
@@ -149,7 +150,7 @@ impl State {
                 })
             }
             Msg::Suggestions(query, found) => {
-                if query == self.query.trim() {
+                if query == self.query.trim() && !prefs.is_incognito {
                     self.suggestions = found;
                 }
                 Task::none()
@@ -606,4 +607,168 @@ mod icons {
     pub const GLASSES: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="14.5" r="3.5"/><circle cx="17.5" cy="14.5" r="3.5"/><path d="M10 14.2c1.3-.9 2.7-.9 4 0M3 14l1.6-6.2A1.8 1.8 0 0 1 6.4 6.5H7M21 14l-1.6-6.2a1.8 1.8 0 0 0-1.8-1.3H17"/></g></svg>"##;
     pub const CHEVRON_RIGHT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     pub const CHEVRON_LEFT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() -> (State, Arc<Services>, settings::State) {
+        // Tasks are built, not run, but need a runtime to be built; this test thread keeps it.
+        let runtime = Box::leak(Box::new(tokio::runtime::Runtime::new().unwrap()));
+        std::mem::forget(runtime.enter());
+        let services = Services::for_test();
+        let mut settings = settings::State::new(&services);
+        settings.prefs = SettingsStore::default();
+        (State::default(), services, settings)
+    }
+
+    fn type_and_submit(
+        search: &mut State,
+        text: &str,
+        services: &Arc<Services>,
+        settings: &mut settings::State,
+    ) {
+        let _ = search.update(Msg::Input(text.to_owned()), services, settings);
+        let _ = search.update(Msg::Submit, services, settings);
+        // Let the "search" finish so the next Input is accepted.
+        let _ = search.update(
+            Msg::Loaded(text.trim().to_owned(), Err("offline".into())),
+            services,
+            settings,
+        );
+    }
+
+    #[test]
+    fn a_suggestion_reply_for_older_text_is_dropped() {
+        let (mut search, services, mut settings) = setup();
+        let _ = search.update(Msg::Input("dap".into()), &services, &mut settings);
+        let _ = search.update(Msg::Input("daft".into()), &services, &mut settings);
+        let _ = search.update(
+            Msg::Suggestions("dap".into(), vec!["dap kings".into()]),
+            &services,
+            &mut settings,
+        );
+        assert!(search.suggestions.is_empty());
+        let _ = search.update(
+            Msg::Suggestions("daft".into(), vec!["daft punk".into()]),
+            &services,
+            &mut settings,
+        );
+        assert_eq!(search.suggestions, ["daft punk"]);
+    }
+
+    #[test]
+    fn a_result_reply_for_an_older_search_is_dropped() {
+        let (mut search, services, mut settings) = setup();
+        let _ = search.update(Msg::Input("one".into()), &services, &mut settings);
+        let _ = search.update(Msg::Submit, &services, &mut settings);
+        let _ = search.update(Msg::Pick("two".into()), &services, &mut settings);
+        let empty = Results {
+            sections: Vec::new(),
+            hero: None,
+            library: Vec::new(),
+        };
+        let _ = search.update(
+            Msg::Loaded("one".into(), Ok(empty)),
+            &services,
+            &mut settings,
+        );
+        assert!(matches!(search.results, Some(Load::Loading)));
+    }
+
+    #[test]
+    fn incognito_searches_leave_no_history_and_no_suggestions() {
+        let (mut search, services, mut settings) = setup();
+        let _ = search.update(Msg::Incognito, &services, &mut settings);
+        assert!(settings.prefs.is_incognito);
+        type_and_submit(&mut search, "secret", &services, &mut settings);
+        assert!(settings.prefs.search_history.is_empty());
+        let _ = search.update(Msg::Input("sec".into()), &services, &mut settings);
+        let _ = search.update(
+            Msg::Suggestions("sec".into(), vec!["secret".into()]),
+            &services,
+            &mut settings,
+        );
+        assert!(search.suggestions.is_empty());
+    }
+
+    #[test]
+    fn turning_incognito_on_drops_a_suggestion_request_still_waiting() {
+        let (mut search, services, mut settings) = setup();
+        let _ = search.update(Msg::Input("sec".into()), &services, &mut settings);
+        let waiting = search.typed;
+        let _ = search.update(Msg::Incognito, &services, &mut settings);
+        // `Suggest` would send "sec" to YouTube: it must not run.
+        let task = search.update(Msg::Suggest(waiting), &services, &mut settings);
+        assert_eq!(task.units(), 0, "incognito must not ask for suggestions");
+    }
+
+    #[test]
+    fn recent_searches_move_to_the_front_without_repeats_and_keep_twenty() {
+        let (mut search, services, mut settings) = setup();
+        for n in 0..25 {
+            type_and_submit(&mut search, &format!("q{n}"), &services, &mut settings);
+        }
+        type_and_submit(&mut search, "  q10  ", &services, &mut settings);
+        let history = &settings.prefs.search_history;
+        assert_eq!(history.len(), 20);
+        assert_eq!(history[0], "q10");
+        assert_eq!(history.iter().filter(|q| *q == "q10").count(), 1);
+    }
+
+    #[test]
+    fn empty_and_blank_searches_are_not_remembered() {
+        let (mut search, services, mut settings) = setup();
+        for text in ["", "   ", "\n\t"] {
+            let _ = search.update(Msg::Input(text.to_owned()), &services, &mut settings);
+            let _ = search.update(Msg::Submit, &services, &mut settings);
+        }
+        assert!(settings.prefs.search_history.is_empty());
+        assert!(search.results.is_none());
+    }
+
+    #[test]
+    fn unicode_queries_are_kept_as_typed() {
+        let (mut search, services, mut settings) = setup();
+        for text in ["بيروت", "米津玄師", "Björk 🎵", "e\u{301}"] {
+            type_and_submit(&mut search, text, &services, &mut settings);
+        }
+        assert_eq!(settings.prefs.search_history[0], "e\u{301}");
+        assert_eq!(settings.prefs.search_history[3], "بيروت");
+    }
+
+    #[test]
+    fn search_history_off_remembers_nothing() {
+        let (mut search, services, mut settings) = setup();
+        settings.prefs.track_search_history = false;
+        type_and_submit(&mut search, "abba", &services, &mut settings);
+        assert!(settings.prefs.search_history.is_empty());
+    }
+
+    #[test]
+    fn sort_delete_and_clear_each_keep_the_earlier_changes() {
+        let (mut search, services, mut settings) = setup();
+        type_and_submit(&mut search, "a", &services, &mut settings);
+        type_and_submit(&mut search, "b", &services, &mut settings);
+        let _ = search.update(Msg::Sort(SearchSort::Rating), &services, &mut settings);
+        let _ = search.update(Msg::Delete("a".into()), &services, &mut settings);
+        assert_eq!(settings.prefs.search_sort, SearchSort::Rating);
+        assert_eq!(settings.prefs.search_history, ["b"]);
+        let _ = search.update(Msg::Clear, &services, &mut settings);
+        assert_eq!(settings.prefs.search_sort, SearchSort::Rating);
+        assert!(settings.prefs.search_history.is_empty());
+    }
+
+    #[test]
+    fn filters_toggle_and_reset_on_a_new_search() {
+        let (mut search, services, mut settings) = setup();
+        let _ = search.update(Msg::Filter(Filter::Library), &services, &mut settings);
+        let _ = search.update(Msg::Filter(Filter::Library), &services, &mut settings);
+        assert_eq!(search.filter, Filter::All);
+        let _ = search.update(Msg::Section("Songs".into()), &services, &mut settings);
+        assert_eq!(search.filter, Filter::Section("Songs".into()));
+        type_and_submit(&mut search, "x", &services, &mut settings);
+        assert_eq!(search.filter, Filter::All);
+    }
 }
