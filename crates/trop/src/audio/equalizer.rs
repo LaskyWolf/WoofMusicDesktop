@@ -108,7 +108,15 @@ pub fn filter(gains: &[f64]) -> Option<String> {
     let entries: Vec<String> = FREQUENCIES
         .iter()
         .zip(gains)
-        .map(|(frequency, gain)| format!("entry({},{})", fmt(*frequency), fmt(*gain)))
+        .map(|(frequency, gain)| {
+            // A hand-edited settings file can hold anything; NaN reads as flat.
+            let gain = if gain.is_nan() {
+                0.0
+            } else {
+                gain.clamp(MIN_GAIN, MAX_GAIN)
+            };
+            format!("entry({},{})", fmt(*frequency), fmt(gain))
+        })
         .collect();
     (!entries.is_empty()).then(|| format!("firequalizer=gain_entry=\"{}\"", entries.join(";")))
 }

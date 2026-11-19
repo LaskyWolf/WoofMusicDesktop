@@ -47,6 +47,15 @@ fn equalizer_goes_last_like_swift() {
 }
 
 #[test]
+fn equalizer_gains_out_of_range_are_clamped() {
+    let filter = trop::audio::equalizer::filter(&[99.0, -99.0, f64::NAN, 0.0]).unwrap();
+    assert!(filter.contains("entry(60.0000,12.0000)"), "{filter}");
+    assert!(filter.contains("entry(120.0000,-12.0000)"), "{filter}");
+    assert!(filter.contains("entry(250.0000,0.0000)"), "{filter}");
+    assert!(!filter.contains("NaN"), "{filter}");
+}
+
+#[test]
 fn normalization_volume_goes_after_the_equalizer() {
     assert_eq!(normalization_gain(Some(-8.5)), Some(-5.5));
     assert_eq!(normalization_gain(Some(-40.0)), Some(12.0));
