@@ -1892,10 +1892,8 @@ impl App {
                 })
             }
             Action::ShowArtists => {
-                let kinds = song
-                    .artists
-                    .iter()
-                    .filter(|artist| !artist.name.is_empty())
+                let kinds = song_menu::named_artists(&song)
+                    .into_iter()
                     .map(|artist| {
                         Task::perform(
                             self.services.clone().artist_kind(artist.name.clone()),
@@ -3474,6 +3472,8 @@ fn is_episode(song: &SongItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trop::audio::sleep_timer::SleepTimer;
+    use trop::networking::models::yt_item::YTArtist;
     use trop::playback::playback_state_service::{PlayRecord, save};
 
     fn app() -> App {
@@ -3561,6 +3561,133 @@ mod tests {
             modifiers: keyboard::Modifiers::default(),
             text: None,
             repeat,
+        }
+    }
+
+    fn artist(name: &str, id: Option<&str>) -> YTArtist {
+        YTArtist {
+            name: name.to_owned(),
+            id: id.map(str::to_owned),
+        }
+    }
+
+    fn open_menu(app: &mut App, song: SongItem) {
+        let _ = app.update(Message::SongMenu(Box::new(song), None));
+    }
+
+    #[test]
+    fn menu_artists_skip_empty_and_repeated_names() {
+        let mut song = song("a");
+        song.artists = vec![
+            artist("Björk", None),
+            artist("", None),
+            artist("  ", None),
+            artist("björk ", Some("UC1")),
+            artist("坂本龍一", None),
+        ];
+        let names: Vec<_> = song_menu::named_artists(&song)
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["Björk", "坂本龍一"]);
+    }
+
+    #[test]
+    fn late_song_details_for_another_song_leave_the_open_menu_alone() {
+        let mut app = app();
+        open_menu(&mut app, song("a"));
+        let _ = app.update(Message::MenuAction(song_menu::Action::ShowDetails));
+        open_menu(&mut app, song("b"));
+        let _ = app.update(Message::MenuDetails("a".into(), Box::default()));
+        assert!(matches!(
+            app.menu.as_ref().unwrap().page,
+            song_menu::Page::Actions
+        ));
+        let _ = app.update(Message::MenuAction(song_menu::Action::ShowDetails));
+        let _ = app.update(Message::MenuDetails("a".into(), Box::default()));
+        assert!(matches!(
+            app.menu.as_ref().unwrap().page,
+            song_menu::Page::Details(None)
+        ));
+        let _ = app.update(Message::MenuDetails("b".into(), Box::default()));
+        assert!(matches!(
+            app.menu.as_ref().unwrap().page,
+            song_menu::Page::Details(Some(_))
+        ));
+    }
+
+    #[test]
+    fn song_details_reply_after_the_menu_closed_or_left_the_page_is_ignored() {
+        let mut app = app();
+        open_menu(&mut app, song("a"));
+        let _ = app.update(Message::MenuAction(song_menu::Action::ShowDetails));
+        let _ = app.update(Message::MenuAction(song_menu::Action::Open(
+            song_menu::Page::Actions,
+        )));
+        let _ = app.update(Message::MenuDetails("a".into(), Box::default()));
+        assert!(matches!(
+            app.menu.as_ref().unwrap().page,
+            song_menu::Page::Actions
+        ));
+        let _ = app.update(Message::CloseMenu);
+        let _ = app.update(Message::MenuDetails("a".into(), Box::default()));
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn rapid_menu_clicks_after_the_menu_closed_do_nothing() {
+        let mut app = app();
+        open_menu(&mut app, song("a"));
+        let _ = app.update(Message::MenuAction(song_menu::Action::RemoveDownload));
+        assert!(app.menu.is_none());
+        for action in [
+            song_menu::Action::RemoveDownload,
+            song_menu::Action::ShowDetails,
+            song_menu::Action::ShowArtists,
+            song_menu::Action::OpenArtist(artist("x", None)),
+        ] {
+            let _ = app.update(Message::MenuAction(action));
+        }
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn menu_views_build_for_odd_songs_in_the_smallest_window() {
+        let timer = SleepTimer::default();
+        let mut odd = song("a");
+        odd.title = "العنوان ".repeat(40);
+        odd.album = None;
+        odd.artists = vec![artist(&"坂".repeat(200), None), artist("", None)];
+        for page in [
+            song_menu::Page::Actions,
+            song_menu::Page::Artists,
+            song_menu::Page::Details(None),
+            song_menu::Page::Details(Some(Box::default())),
+            song_menu::Page::ConfirmRemove,
+        ] {
+            for downloaded in [false, true] {
+                let menu = song_menu::Menu {
+                    song: odd.clone(),
+                    at: Point::new(870.0, 550.0),
+                    queue_index: Some(0),
+                    page: page.clone(),
+                };
+                let _ = song_menu::view(
+                    &menu,
+                    song_menu::Context {
+                        liked: false,
+                        downloaded,
+                        account: false,
+                        playing: false,
+                        sleep: &timer,
+                        room: None,
+                        guest: false,
+                        pinned: false,
+                        speed: 1.0,
+                        window: Size::new(880.0, 560.0),
+                    },
+                );
+            }
         }
     }
 

@@ -268,11 +268,7 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
             Action::GoTo(Route::Album(id)),
         ));
     }
-    let named: Vec<&YTArtist> = song
-        .artists
-        .iter()
-        .filter(|artist| !artist.name.is_empty())
-        .collect();
+    let named = named_artists(song);
     // Swift `handleViewArtist`: several artists ask which; one opens, by name when it has no id.
     match named.as_slice() {
         [] => {}
@@ -330,11 +326,21 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
     items
 }
 
-/// The artists with their kind from MusicBrainz, once it answered.
-fn artist_items<'a>(song: &SongItem) -> Vec<Element<'a, Message>> {
+/// The song's artists the picker lists: no blank names, each name once
+/// (the first entry wins).
+pub(crate) fn named_artists(song: &SongItem) -> Vec<&YTArtist> {
+    let mut seen = std::collections::HashSet::new();
     song.artists
         .iter()
-        .filter(|artist| !artist.name.is_empty())
+        .filter(|artist| seen.insert(artist.name.trim().to_lowercase()))
+        .filter(|artist| !artist.name.trim().is_empty())
+        .collect()
+}
+
+/// The artists with their kind from MusicBrainz, once it answered.
+fn artist_items<'a>(song: &SongItem) -> Vec<Element<'a, Message>> {
+    named_artists(song)
+        .into_iter()
         .map(|artist| {
             let label = match artist_kind_service::cached_kind(&artist.name) {
                 Some(kind) => format!("{} · {kind}", artist.name),
