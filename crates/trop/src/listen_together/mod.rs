@@ -140,4 +140,71 @@ mod tests {
         );
         assert!(matches!(events.last(), Some(Event::Closed(_))));
     }
+
+    /// Garbage, a compressed envelope and a 5 MB frame are skipped; the
+    /// valid message after them still arrives, and dropping the outbox ends
+    /// the stream (no task is left running).
+    #[tokio::test]
+    async fn bad_frames_are_skipped_and_dropping_the_outbox_ends_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let mut frames = vec![
+                Message::Binary(vec![0xFF; 20].into()),
+                Message::Text("{\"not\":\"protobuf\"}".into()),
+                Message::Binary(vec![7u8; 5_000_000].into()),
+                Message::Binary(protocol::Envelope::encode("x", &[0x0A, 0xFF, 0xFF]).into()),
+            ];
+            let mut compressed = protocol::Writer::default();
+            compressed.string(1, "zipped");
+            compressed.bool(3, true);
+            frames.push(Message::Binary(compressed.finish().into()));
+            frames.push(Message::Binary(
+                protocol::Envelope::encode(protocol::kind::PONG, &[]).into(),
+            ));
+            for frame in frames {
+                ws.send(frame).await.unwrap();
+            }
+            // Waits for the client to hang up.
+            while let Some(Ok(message)) = ws.next().await {
+                if message.is_close() {
+                    break;
+                }
+            }
+        });
+        let (outbox, events) = connect(format!("ws://{address}"), "WoofMusic test".into());
+        let mut events = Box::pin(events);
+        let mut kinds = Vec::new();
+        while let Some(Event::Message(kind, _)) = events.next().await {
+            kinds.push(kind.clone());
+            if kind == protocol::kind::PONG {
+                break;
+            }
+        }
+        assert_eq!(kinds, ["x", protocol::kind::PONG]);
+        drop(outbox);
+        let rest: Vec<Event> = tokio::time::timeout(Duration::from_secs(5), events.collect())
+            .await
+            .expect("the stream must end");
+        assert!(matches!(rest.as_slice(), [Event::Closed(_)]));
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("the server saw the close")
+            .unwrap();
+    }
+
+    /// Nothing listens there: one `Closed`, then the stream ends (no retry loop).
+    #[tokio::test]
+    async fn a_refused_connection_closes_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let (_outbox, events) = connect(format!("ws://{address}"), "WoofMusic test".into());
+        let events: Vec<Event> = tokio::time::timeout(Duration::from_secs(5), events.collect())
+            .await
+            .expect("must not hang");
+        assert!(matches!(events.as_slice(), [Event::Closed(_)]));
+    }
 }

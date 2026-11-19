@@ -2143,7 +2143,11 @@ impl App {
     /// on to the song now playing.
     fn tick_transitions(&mut self) -> Task<Message> {
         // A Listen Together guest plays what the room plays: no mixes of its own.
-        if self.together.is_guest() {
+        let mixing = self
+            .transitions
+            .as_ref()
+            .is_some_and(|t| t.mixing_into().is_some());
+        if self.together.blocks_transitions(mixing) {
             return Task::none();
         }
         let Some(transitions) = &mut self.transitions else {

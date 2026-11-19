@@ -51,6 +51,8 @@ const MAX_DRIFT_MS: i64 = 400;
 /// show that channel's picture; Metrolist shows the name with the code.
 const CHANNEL_TAG: &str = " \u{2063}";
 const MAX_NAME_BYTES: usize = 50;
+/// The longest pause a "server restarting" message can ask for, seconds.
+const MAX_RESTART_WAIT: u64 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -262,10 +264,7 @@ pub fn split(username: &str) -> (&str, Option<&str>) {
 
 /// `name` with the channel tag, cut so the whole fits metroserver's 50 bytes.
 fn tagged(name: &str, channel: Option<&str>) -> String {
-    let Some(channel) = channel else {
-        return name.to_owned();
-    };
-    let suffix = format!("{CHANNEL_TAG}{channel}");
+    let suffix = channel.map_or(String::new(), |channel| format!("{CHANNEL_TAG}{channel}"));
     let mut name = name.to_owned();
     while !name.is_empty() && name.len() + suffix.len() > MAX_NAME_BYTES {
         name.pop();
@@ -377,6 +376,12 @@ impl Room {
     /// While a guest, the room drives playback and AutoMix stays off.
     pub fn is_guest(&self) -> bool {
         self.is_in_room() && !self.is_host()
+    }
+
+    /// A guest plays what the room plays, so its own AutoMix stays off; a mix
+    /// already fading still runs to its end (nothing else would end it).
+    pub fn blocks_transitions(&self, mixing: bool) -> bool {
+        self.is_guest() && !mixing
     }
 
     pub fn room_code(&self) -> Option<&str> {
@@ -632,11 +637,10 @@ impl Room {
             return Task::none();
         }
         self.session_token = Some(token);
-        let delay =
-            after.unwrap_or_else(|| 2f64.powi(self.reconnect_attempts as i32 - 1).min(30.0));
+        let delay = reconnect_delay(self.reconnect_attempts, after);
         self.retry += 1;
         let attempt = self.retry;
-        Task::future(tokio::time::sleep(Duration::from_secs_f64(delay)))
+        Task::future(tokio::time::sleep(delay))
             .map(move |()| Message::Together(Msg::Retry(attempt)))
     }
 
@@ -1014,6 +1018,14 @@ impl Room {
         // Where the host is now: the position plus the time since the server sent it.
         let elapsed = (self.server_now() - playback.server_time).max(0) as f64 / 1000.0;
         let position = playback.position as f64 / 1000.0;
+        // Never past the end (a missing server time counts the whole epoch
+        // as elapsed): mpv would end the song and the guest would skip it.
+        let last = if np.duration > 0.0 {
+            (np.duration - 1.0).max(0.0)
+        } else {
+            f64::MAX
+        };
+        let seek = |target: f64| Effect::Seek(target.clamp(0.0, last));
         let ready = self.awaiting_buffer.is_none()
             && self.pending_load.is_none()
             && np.video_id() == Some(playback.track_id.as_str());
@@ -1028,15 +1040,15 @@ impl Room {
             "play" if ready => {
                 let target = position + elapsed;
                 if (np.position - target).abs() > 0.5 {
-                    effects.push(Effect::Seek(target));
+                    effects.push(seek(target));
                 }
                 effects.push(Effect::Paused(false));
             }
             "pause" if ready => {
                 effects.push(Effect::Paused(true));
-                effects.push(Effect::Seek(position));
+                effects.push(seek(position));
             }
-            "seek" if ready => effects.push(Effect::Seek(if np.playing {
+            "seek" if ready => effects.push(seek(if np.playing {
                 position + elapsed
             } else {
                 position
@@ -1137,6 +1149,19 @@ impl Room {
             user("a", "Marta", false, true),
             user("b", "Kenji (Metrolist)", false, false),
         ];
+        // Dev aid: WOOF_TOGETHER_USERS=200 adds that many more guests.
+        let extra: usize = std::env::var("WOOF_TOGETHER_USERS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        self.users.extend((0..extra).map(|n| {
+            user(
+                &format!("g{n}"),
+                &format!("Guest number {n} with a rather long name"),
+                false,
+                n % 3 != 0,
+            )
+        }));
         self.join_requests = vec![p::Pair("c".into(), "Sam".into())];
         self.suggestions = vec![p::Suggestion {
             id: "s".into(),
@@ -1241,7 +1266,7 @@ impl Room {
         .on_press(Message::Together(Msg::Close));
         Some(opaque(stack![
             scrim,
-            container(opaque(panel)).center(Length::Fill)
+            container(opaque(panel)).center(Length::Fill).padding(24)
         ]))
     }
 
@@ -1488,6 +1513,25 @@ impl Room {
     }
 }
 
+/// The pause before reconnect attempt `attempt`: doubling up to 30 s, or what
+/// the server asked for, at most `MAX_RESTART_WAIT`.
+fn reconnect_delay(attempt: u32, after: Option<f64>) -> Duration {
+    let seconds = after.map_or_else(
+        || {
+            2f64.powi(attempt.saturating_sub(1).min(10) as i32)
+                .min(30.0)
+        },
+        |wait| {
+            if wait.is_nan() {
+                1.0
+            } else {
+                wait.clamp(0.0, MAX_RESTART_WAIT as f64)
+            }
+        },
+    );
+    Duration::from_secs_f64(seconds)
+}
+
 /// Swift's `.random(in: 0...1)` for the restart jitter.
 fn noise() -> f64 {
     SystemTime::now()
@@ -1670,6 +1714,65 @@ mod tests {
         assert!(long.starts_with(split(&name).0));
         assert_eq!(split("Marta"), ("Marta", None));
         assert_eq!(tagged("Marta", None), "Marta");
+    }
+
+    #[test]
+    fn a_long_name_without_a_channel_still_fits_fifty_bytes() {
+        let name = tagged(&"é".repeat(60), None);
+        assert!(name.len() <= MAX_NAME_BYTES);
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn the_restart_pause_and_the_backoff_stay_bounded() {
+        assert_eq!(reconnect_delay(1, None), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(30, None), Duration::from_secs(30));
+        // A server asking to wait for days is not obeyed.
+        assert!(reconnect_delay(1, Some(1e15)) <= Duration::from_secs(MAX_RESTART_WAIT));
+        assert!(reconnect_delay(1, Some(f64::NAN)) <= Duration::from_secs(MAX_RESTART_WAIT));
+    }
+
+    #[test]
+    fn a_guest_lets_its_own_crossfade_finish() {
+        let guest = Room {
+            room_code: Some("AB".into()),
+            my_user_id: Some("me".into()),
+            host_id: Some("host".into()),
+            ..Room::default()
+        };
+        assert!(guest.blocks_transitions(false));
+        assert!(!guest.blocks_transitions(true));
+        assert!(!Room::default().blocks_transitions(false));
+    }
+
+    #[test]
+    fn a_guest_never_seeks_past_the_end_of_its_song() {
+        let mut room = Room {
+            room_code: Some("AB".into()),
+            my_user_id: Some("me".into()),
+            host_id: Some("host".into()),
+            ..Room::default()
+        };
+        // No server time at all: the whole epoch would count as elapsed.
+        let mut play = p::Playback::new("play", 1);
+        play.track_id = "song".into();
+        play.position = 5_000;
+        let mut effects = Vec::new();
+        room.guest_apply(&play, &playback("song", false, 0.0), &mut effects);
+        let Some(Effect::Seek(target)) = effects.first() else {
+            panic!("no seek: {effects:?}");
+        };
+        assert!(*target < 200.0, "seeked to {target}");
+        // A negative position from the host does not go before the start.
+        play.position = -9_000;
+        play.server_time = room.server_now();
+        effects.clear();
+        room.guest_apply(&play, &playback("song", true, 30.0), &mut effects);
+        assert!(
+            effects
+                .iter()
+                .all(|e| !matches!(e, Effect::Seek(t) if *t < 0.0))
+        );
     }
 
     fn playback(id: &str, playing: bool, position: f64) -> Playback {
