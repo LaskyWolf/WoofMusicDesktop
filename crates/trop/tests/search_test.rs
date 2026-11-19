@@ -298,3 +298,31 @@ fn songs_under_the_artist_card_carry_that_artist() {
         );
     }
 }
+
+#[test]
+fn local_search_treats_percent_and_underscore_as_plain_characters() {
+    use trop::database::database_service::DatabaseService;
+    use trop::database::entities::artist_entity::ArtistEntity;
+    let db = DatabaseService::open_in_memory();
+    for (id, name) in [("a1", "Daft Punk"), ("a2", "100% Pure")] {
+        db.insert(&ArtistEntity {
+            id: id.into(),
+            name: name.into(),
+            thumbnail_url: None,
+            bookmarked_at: None,
+            is_podcast_channel: false,
+            channel_id: None,
+        })
+        .unwrap();
+    }
+    for wildcard in ["_", "D_ft"] {
+        assert!(
+            SearchService::local_search(&db, wildcard)
+                .unwrap()
+                .is_empty(),
+            "{wildcard:?} matched"
+        );
+    }
+    let percent = SearchService::local_search(&db, "%").unwrap();
+    assert_eq!(percent[0].items.len(), 1, "only the name with a % in it");
+}

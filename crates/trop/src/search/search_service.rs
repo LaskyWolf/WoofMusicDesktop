@@ -139,10 +139,17 @@ impl SearchService {
     /// The library's matches for `query`, as Search's Library sections
     /// (Swift `localSearch` and `librarySections`).
     pub fn local_search(db: &DatabaseService, query: &str) -> rusqlite::Result<Vec<SearchSection>> {
-        let pattern = format!("%{query}%");
+        // `%`, `_` and `\` in the query are letters, not wildcards.
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
         let songs = db
             .fetch_all_sql::<SongEntity>(
-                "SELECT * FROM song WHERE title LIKE ?1 OR artist_name LIKE ?1 \
+                "SELECT * FROM song WHERE title LIKE ?1 ESCAPE '\\' OR artist_name LIKE ?1 ESCAPE '\\' \
                  ORDER BY total_play_time DESC LIMIT 50",
                 [&pattern],
             )?
@@ -164,7 +171,7 @@ impl SearchService {
             });
         let albums = db
             .fetch_all_sql::<AlbumEntity>(
-                "SELECT * FROM album WHERE title LIKE ? LIMIT 20",
+                "SELECT * FROM album WHERE title LIKE ? ESCAPE '\\' LIMIT 20",
                 [&pattern],
             )?
             .into_iter()
@@ -179,7 +186,7 @@ impl SearchService {
             });
         let artists = db
             .fetch_all_sql::<ArtistEntity>(
-                "SELECT * FROM artist WHERE name LIKE ? LIMIT 20",
+                "SELECT * FROM artist WHERE name LIKE ? ESCAPE '\\' LIMIT 20",
                 [&pattern],
             )?
             .into_iter()
@@ -193,7 +200,7 @@ impl SearchService {
             });
         let playlists = db
             .fetch_all_sql::<PlaylistEntity>(
-                "SELECT * FROM playlist WHERE name LIKE ? LIMIT 20",
+                "SELECT * FROM playlist WHERE name LIKE ? ESCAPE '\\' LIMIT 20",
                 [&pattern],
             )?
             .into_iter()

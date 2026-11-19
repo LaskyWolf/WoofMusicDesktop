@@ -430,6 +430,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unreadable_search_settings_fall_back_and_keep_the_other_keys() {
+        let dir = std::env::temp_dir().join(format!("woof-search-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"Search.sort":"bogus","Search.history":"not a list","settings.isIncognito":true,"settings.hideExplicit":true}"#,
+        )
+        .unwrap();
+        let settings: SettingsStore = load_keeping_valid_keys(&path);
+        assert_eq!(settings.search_sort, SearchSort::Relevant);
+        assert!(settings.search_history.is_empty());
+        assert!(settings.is_incognito && settings.hide_explicit);
+        std::fs::write(&path, "\u{0}\u{0}{{{").unwrap();
+        let settings: SettingsStore = load_keeping_valid_keys(&path);
+        assert!(settings.track_search_history && !settings.is_incognito);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn missing_keys_read_as_swift_defaults() {
         let settings: SettingsStore =
             serde_json::from_str(r#"{"settings.hideExplicit": true}"#).unwrap();
