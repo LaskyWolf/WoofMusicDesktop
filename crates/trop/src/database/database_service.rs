@@ -144,19 +144,11 @@ impl DatabaseService {
         }
     }
 
-    /// Swift `ProfileStorage.databaseURL` for the original profile:
-    /// `$XDG_DATA_HOME` (or `~/.local/share`) on Linux, `%APPDATA%` on Windows,
-    /// then `WoofMusic/trop.sqlite`.
+    /// Swift `ProfileStorage.databaseURL`: `trop.sqlite` in the active
+    /// profile's folder (`$XDG_DATA_HOME/WoofMusic` or `%APPDATA%\WoofMusic`
+    /// for the first profile). Downloads sit next to it.
     pub fn default_path() -> Option<PathBuf> {
-        let env = |name| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        let base = env("XDG_DATA_HOME")
-            .or_else(|| env("APPDATA"))
-            .or_else(|| env("HOME").map(|home| home.join(".local").join("share")))?;
-        Some(base.join("WoofMusic").join("trop.sqlite"))
+        Some(swiftytube::auth::profile_storage::dir()?.join("trop.sqlite"))
     }
 
     /// The disk database failed to open, so nothing is saved until the next launch.

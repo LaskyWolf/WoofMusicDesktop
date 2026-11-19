@@ -6,6 +6,7 @@ pub mod auth_state_provider;
 pub mod cookie_harvest;
 pub mod cookie_parser;
 pub mod login_webview_harvest;
+pub mod profile_storage;
 pub mod sapisid_auth;
 pub mod secure_store;
 pub mod session_importer;

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use iced::widget::image;
 use swiftytube::auth::account_info::AccountInfo;
 use swiftytube::auth::auth_state::AuthState;
+use swiftytube::auth::profile_storage::{self, Registry, SavedProfile};
 use swiftytube::auth::secure_store::{SecureAuthStore, SecureStore};
 use swiftytube::auth::session_importer::SessionImporter;
 use swiftytube::core::swiftytube_config::SwiftyTubeConfig;
@@ -457,6 +458,137 @@ impl Services {
         }
     }
 
+    // MARK: - Profiles (Swift `AccountState`)
+
+    /// Swift `rememberCurrentProfile`: saves the signed-in session under its
+    /// account, so it can be switched back to.
+    pub async fn remember_profile(self: Arc<Self>, info: AccountInfo) {
+        let auth = self.client.current_auth();
+        if auth.sapisid.is_none() {
+            return;
+        }
+        blocking(move || {
+            let mut registry = Registry::load();
+            let id = match registry.current.clone() {
+                Some(id) => id,
+                None => {
+                    // A session signed in before profiles existed: it owns the app's current data.
+                    let id = auth
+                        .data_sync_id
+                        .clone()
+                        .or_else(|| info.email.clone())
+                        .unwrap_or_else(|| info.name.clone());
+                    registry.claim(&id);
+                    registry.current = Some(id.clone());
+                    id
+                }
+            };
+            save_profile_session(&id, &auth);
+            let profile = SavedProfile {
+                id: id.clone(),
+                name: info.name,
+                thumbnail_url: info.thumbnail_url,
+            };
+            match registry.profiles.iter_mut().find(|p| p.id == id) {
+                Some(saved) => *saved = profile,
+                None => registry.profiles.push(profile),
+            }
+            if let Err(error) = registry.save() {
+                log::error!("Could not save the profiles: {error}");
+            }
+        })
+        .await;
+    }
+
+    /// Swift `beginAddingAccount` and `openProfileOfNewSession`: signs in to
+    /// another account. `Ok(true)`: the account has its own data, so the app
+    /// must restart on it.
+    pub async fn add_account(self: Arc<Self>) -> Result<bool, String> {
+        let current = self.client.current_auth();
+        blocking(move || save_current_session(&current)).await;
+        let auth = blocking(|| webview("--login", None))
+            .await
+            .flatten()
+            .ok_or("Sign-in did not finish.")?;
+        self.adopt(auth.clone()).await;
+        let info = self.clone().account().await.ok();
+        blocking(move || {
+            let mut registry = Registry::load();
+            let email = info.as_ref().and_then(|info| info.email.clone());
+            let name = info
+                .as_ref()
+                .map(|info| info.name.clone())
+                .filter(|name| name != "Guest");
+            let seen = registry
+                .claimed(auth.data_sync_id.iter().chain(&email).map(String::as_str))
+                .map(str::to_owned);
+            // ponytail: without a sync id or a menu this login gets a new
+            // profile; it can't be matched to an old one.
+            let id = seen
+                .or_else(|| auth.data_sync_id.clone())
+                .or(email)
+                .or_else(|| name.clone())
+                .unwrap_or_else(|| format!("{:x}", std::process::id()));
+            let storage = registry.claim(&id);
+            registry.current = Some(id.clone());
+            save_profile_session(&id, &auth);
+            if !registry.profiles.iter().any(|p| p.id == id) {
+                registry.profiles.push(SavedProfile {
+                    id,
+                    name: name.unwrap_or_default(),
+                    thumbnail_url: info.and_then(|info| info.thumbnail_url),
+                });
+            }
+            let moves = storage != profile_storage::active();
+            registry.active = storage;
+            registry.save().map_err(|error| error.to_string())?;
+            Ok(moves)
+        })
+        .await
+        .unwrap_or_else(|| Err("Could not save the account.".into()))
+    }
+
+    /// Swift `switchTo`: the next launch opens `id` with its session and data.
+    pub async fn switch_profile(self: Arc<Self>, id: String) -> Result<(), String> {
+        let current = self.client.current_auth();
+        blocking(move || {
+            save_current_session(&current);
+            let auth = load_profile_session(&id)
+                .ok_or("This account's session is missing. Sign in again.")?;
+            keyring().save(&auth).map_err(|error| error.to_string())?;
+            let mut registry = Registry::load();
+            registry.active = registry.claim(&id);
+            registry.current = Some(id);
+            registry.save().map_err(|error| error.to_string())
+        })
+        .await
+        .unwrap_or_else(|| Err("Could not switch accounts.".into()))
+    }
+
+    /// Swift `signOut`: removes this account from the list. `Some(id)`:
+    /// another saved account to switch to; `None`: now a guest.
+    pub async fn sign_out_profile(self: Arc<Self>) -> Option<String> {
+        let next = blocking(|| {
+            let mut registry = Registry::load();
+            let leaving = registry.current.take();
+            if let Some(leaving) = &leaving {
+                registry.profiles.retain(|p| &p.id != leaving);
+                let _ = SecureStore::new(crate::APP_ID).delete(&profile_key(leaving));
+            }
+            let next = registry.profiles.first().map(|p| p.id.clone());
+            if let Err(error) = registry.save() {
+                log::error!("Could not save the profiles: {error}");
+            }
+            next
+        })
+        .await
+        .flatten();
+        if next.is_none() {
+            self.sign_out().await;
+        }
+        next
+    }
+
     /// The signed-in account. A guest-shaped answer means stale rotating
     /// tokens (Swift `AccountState.fetchAccountInfo`): ask three times, then
     /// renew the session once through Google and ask again.
@@ -738,6 +870,37 @@ impl Artwork {
 
 fn keyring() -> SecureAuthStore {
     SecureAuthStore::new(SecureStore::new(crate::APP_ID))
+}
+
+/// The keyring entry of a saved account's session.
+fn profile_key(id: &str) -> String {
+    format!("profile.{id}")
+}
+
+fn save_profile_session(id: &str, auth: &AuthState) {
+    let json = serde_json::to_vec(auth).expect("AuthState always serializes");
+    // ponytail: Windows Credential Manager caps a secret at 2560 bytes, like
+    // the main session; split it if saving fails there.
+    if let Err(error) = SecureStore::new(crate::APP_ID).save(&json, &profile_key(id)) {
+        log::error!("Could not save the account's session: {error}");
+    }
+}
+
+fn load_profile_session(id: &str) -> Option<AuthState> {
+    let json = SecureStore::new(crate::APP_ID)
+        .load(&profile_key(id))
+        .ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
+/// Swift `saveCurrentSession`: Google rotates its tokens, so the saved copy goes out of date.
+fn save_current_session(auth: &AuthState) {
+    if auth.sapisid.is_none() {
+        return;
+    }
+    if let Some(id) = Registry::load().current {
+        save_profile_session(&id, auth);
+    }
 }
 
 /// Keyring and child-process calls block: off the async workers. `None` if the task panicked.

@@ -33,18 +33,11 @@ impl IncrementalSyncService {
         }
     }
 
-    /// Swift `UserDefaults.standard`: `$XDG_DATA_HOME` (or `~/.local/share`) /
-    /// `%APPDATA%`, then `WoofMusic/sync_defaults.json`.
+    /// Swift `ProfileStorage.defaults`: `sync_defaults.json` in the active
+    /// profile's folder (`$XDG_DATA_HOME/WoofMusic` or `%APPDATA%\WoofMusic`
+    /// for the first profile).
     pub fn default_defaults_path() -> Option<PathBuf> {
-        let env = |name| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        let base = env("XDG_DATA_HOME")
-            .or_else(|| env("APPDATA"))
-            .or_else(|| env("HOME").map(|home| home.join(".local").join("share")))?;
-        Some(base.join("WoofMusic").join("sync_defaults.json"))
+        Some(crate::auth::profile_storage::dir()?.join("sync_defaults.json"))
     }
 
     /// Seconds since 1970, stored as a JSON number.

@@ -25,6 +25,7 @@ use trop::utilities::ui_image_color_extraction::Rgb;
 
 use crate::services::{Artwork, Services};
 use crate::{Message, Session, settings, theme, ui};
+use swiftytube::auth::profile_storage::Registry;
 
 const SLIDE_SECONDS: f32 = 4.0;
 const TICK_MS: u64 = 50;
@@ -450,6 +451,8 @@ impl Profile {
         covers: &'a ui::Covers,
         session: &'a Session,
         track_history: bool,
+        profiles: &'a Registry,
+        changing: bool,
     ) -> Element<'a, Message> {
         let (name, photo, signed_in) = match session {
             Session::SignedIn(Some(Ok(info))) => {
@@ -495,6 +498,7 @@ impl Profile {
         let tz = TimeZone::system();
         let now = Timestamp::now();
         let open = |interval| track_history.then_some(Message::Profile(Msg::Open(interval)));
+        let accounts = accounts(covers, profiles, signed_in, changing);
         let mut recaps = vec![recap_row(
             SPARKLES,
             "This Month's Recap".to_owned(),
@@ -548,6 +552,7 @@ impl Profile {
             header,
             Space::new().height(28),
             account,
+            accounts,
             Space::new().height(32),
             recap_section,
             Space::new().height(32),
@@ -1542,6 +1547,76 @@ fn badge_detail(badge: &RecapBadge) -> Element<'_, Message> {
 // MARK: - Rows
 
 /// A whole-row button inside a `settings::group`.
+/// Swift `ProfileView` accounts section: switch to a saved account, add another.
+fn accounts<'a>(
+    covers: &'a ui::Covers,
+    profiles: &'a Registry,
+    signed_in: bool,
+    changing: bool,
+) -> Element<'a, Message> {
+    if !signed_in && profiles.profiles.is_empty() {
+        return Space::new().into();
+    }
+    let current = profiles.current.as_deref();
+    let mut rows: Vec<Element<'a, Message>> = profiles
+        .profiles
+        .iter()
+        .map(|profile| {
+            let is_current = Some(profile.id.as_str()) == current;
+            let mark: Element<'a, Message> = if is_current {
+                ui::icon(crate::song_menu::icons::CHECK, 16.0).into()
+            } else {
+                Space::new().into()
+            };
+            row_button(
+                row![
+                    ui::cover(covers, profile.thumbnail_url.as_deref(), 32.0, 16.0),
+                    text(profile.name.as_str()).size(15).width(Length::Fill),
+                    mark,
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .into(),
+                (!is_current && !changing).then(|| Message::SwitchProfile(profile.id.clone())),
+            )
+        })
+        .collect();
+    // Another account's session can't be saved over this one until this one is saved.
+    let can_add =
+        !changing && current.is_some_and(|id| profiles.profiles.iter().any(|p| p.id == id));
+    rows.push(row_button(
+        row![
+            ui::icon(crate::song_menu::icons::PLUS, 16.0).opacity(if can_add {
+                1.0_f32
+            } else {
+                0.4
+            }),
+            text("Add Account").size(15).color(if can_add {
+                theme::accent()
+            } else {
+                theme::SECONDARY
+            }),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .into(),
+        can_add.then_some(Message::AddAccount),
+    ));
+    column![
+        Space::new().height(32),
+        ui::section_title("Accounts"),
+        Space::new().height(12),
+        settings::group(rows),
+        container(settings::caption(if changing {
+            "Accounts can't change while songs are downloading."
+        } else {
+            "Each account keeps its own library and downloads on this computer."
+        }))
+        .padding([8, 18]),
+    ]
+    .into()
+}
+
 fn row_button<'a>(label: Element<'a, Message>, message: Option<Message>) -> Element<'a, Message> {
     button(label)
         .padding([14, 18])

@@ -60,6 +60,7 @@ use trop::services::personalization_service::RadioOptions;
 use pages::LibraryFilter;
 use services::{Artwork, Library, Lyrics, Services};
 use swiftytube::auth::account_info::AccountInfo;
+use swiftytube::auth::profile_storage::Registry;
 use transitions::Transitions;
 use trop::playback::playback_state_service::{PlayRecord, PlaybackStateService};
 use trop::playback::youtube_history_report::YouTubeHistoryReport;
@@ -286,6 +287,10 @@ impl Detail {
 
 struct App {
     services: Arc<Services>,
+    /// The saved accounts (Swift `AccountState.profiles`).
+    profiles: Registry,
+    /// An account is being added or opened.
+    switching: bool,
     maximized: bool,
     /// Never empty: the last entry is the page on screen.
     stack: Vec<Entry>,
@@ -476,6 +481,15 @@ pub enum Message {
     /// The login window or the pasted cookies answered. Only this ends `SigningIn`.
     SignInDone(bool),
     Account(Result<AccountInfo, String>),
+    /// `profiles.json` changed: read it again.
+    ProfilesChanged,
+    AddAccount,
+    /// `true`: the new account has its own data, so the app restarts on it.
+    AccountAdded(Result<bool, String>),
+    SwitchProfile(String),
+    ProfileSwitched(Result<(), String>),
+    /// Another saved account to switch to, or none.
+    SignedOut(Option<String>),
     Download(downloads::Msg),
     /// Creating, renaming, deleting and editing playlists.
     PlaylistEdit(playlist_edit::Msg),
@@ -503,6 +517,8 @@ pub enum Message {
     AutoplayRadio(String, Result<(Vec<SongItem>, usize), String>),
     AddedToPlaylist(String, Result<(), String>),
     ClearNotice(u64),
+    /// Shows a sentence above the player bar.
+    Notify(String),
     Shuffle,
     Repeat,
     Volume(f64),
@@ -537,6 +553,8 @@ impl App {
             None => {}
         }
         let mut app = Self {
+            profiles: Registry::load(),
+            switching: false,
             services: services.clone(),
             maximized: false,
             stack,
@@ -896,9 +914,58 @@ impl App {
             }
             Message::SignOut => {
                 self.session = Session::Guest;
-                Task::perform(self.services.clone().sign_out(), |()| {
-                    Message::SessionReady(false)
-                })
+                Task::perform(self.services.clone().sign_out_profile(), Message::SignedOut)
+            }
+            Message::SignedOut(Some(next)) => self.update(Message::SwitchProfile(next)),
+            Message::SignedOut(None) => {
+                self.profiles = Registry::load();
+                self.update(Message::SessionReady(false))
+            }
+            Message::Notify(text) => self.notify(&text),
+            Message::ProfilesChanged => {
+                self.profiles = Registry::load();
+                self.fetch_covers(
+                    self.profiles
+                        .profiles
+                        .iter()
+                        .filter_map(|p| p.thumbnail_url.clone())
+                        .collect::<Vec<_>>(),
+                )
+            }
+            Message::AddAccount => {
+                if self.changing_account() {
+                    return Task::none();
+                }
+                self.switching = true;
+                Task::perform(self.services.clone().add_account(), Message::AccountAdded)
+            }
+            Message::AccountAdded(result) => {
+                self.switching = false;
+                match result {
+                    Ok(true) => restart(),
+                    Ok(false) => Task::batch([
+                        self.update(Message::SessionReady(true)),
+                        self.update(Message::ProfilesChanged),
+                    ]),
+                    Err(problem) => self.notify(&problem),
+                }
+            }
+            Message::SwitchProfile(id) => {
+                if self.switching || !self.services.downloads.downloads().is_empty() {
+                    return self.notify("Accounts can't change while songs are downloading.");
+                }
+                self.switching = true;
+                Task::perform(
+                    self.services.clone().switch_profile(id),
+                    Message::ProfileSwitched,
+                )
+            }
+            Message::ProfileSwitched(result) => {
+                self.switching = false;
+                match result {
+                    Ok(()) => restart(),
+                    Err(problem) => self.notify(&problem),
+                }
             }
             Message::SignInDone(true) => self.update(Message::SessionReady(true)),
             Message::SignInDone(false) => {
@@ -949,8 +1016,16 @@ impl App {
                     .as_ref()
                     .ok()
                     .and_then(|info| info.thumbnail_url.clone());
+                let remember = match &result {
+                    Ok(info) => {
+                        Task::perform(self.services.clone().remember_profile(info.clone()), |()| {
+                            Message::ProfilesChanged
+                        })
+                    }
+                    Err(_) => Task::none(),
+                };
                 self.session = Session::SignedIn(Some(result));
-                self.fetch_covers(photo)
+                Task::batch([self.fetch_covers(photo), remember])
             }
             Message::LibraryLoaded(result) => {
                 let covers = match &result {
@@ -1840,6 +1915,12 @@ impl App {
         self.notify(&format!("Radio: {added} songs up next"))
     }
 
+    /// Accounts can't change while one is opening or songs download: a
+    /// download would land in the wrong profile.
+    fn changing_account(&self) -> bool {
+        self.switching || !self.services.downloads.downloads().is_empty()
+    }
+
     /// Shows `message` above the player bar for a few seconds.
     fn notify(&mut self, message: &str) -> Task<Message> {
         let id = self.notice.as_ref().map_or(0, |(id, _)| id + 1);
@@ -2460,6 +2541,8 @@ impl App {
                 covers,
                 &self.session,
                 self.settings.prefs.track_play_history,
+                &self.profiles,
+                self.changing_account(),
             ),
             Route::Activity => match &self.session {
                 Session::SignedIn(_) => pages::activity(covers, self.feeds.activity.as_deref()),
@@ -2928,6 +3011,22 @@ fn dev_seek_end(services: &Services, player: &Player) {
     }
 }
 
+/// Starts the app again, on the profile `profiles.json` now names, and
+/// closes this one. Ponytail: a restart instead of Swift's reopening of every
+/// service; reopen in place if the flash of the window matters.
+fn restart() -> Task<Message> {
+    // Inside an AppImage the binary vanishes once this process exits.
+    let exe = std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok());
+    match exe.map(|exe| std::process::Command::new(exe).spawn()) {
+        Some(Ok(_)) => iced::exit(),
+        _ => Task::done(Message::Notify(
+            "Couldn't restart. Quit and open WoofMusic to use the account.".into(),
+        )),
+    }
+}
+
 /// A link the app was started with: `woofmusic <link>`, or the
 /// `woofmusic://open?url=<link>` the desktop file hands over.
 fn launch_link() -> Option<String> {
@@ -3177,6 +3276,8 @@ mod tests {
     fn app() -> App {
         let services = Services::for_test();
         App {
+            profiles: Registry::default(),
+            switching: false,
             settings: settings::State::new(&services),
             lyrics_extras: lyrics::State::new(&services),
             services,

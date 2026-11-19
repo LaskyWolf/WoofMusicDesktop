@@ -116,7 +116,7 @@ Home and Search [main]
 - [ ] Last Home page shown at launch, more pages on scroll (`SavedHome`), shimmer placeholders (`ShimmerLoadingView`)
 - [ ] Search: recent searches and the Track Search History setting, suggestions while typing, filter chips, section drill-down, sort, artist hero card, library results, incognito (`Search/`)
 - [x] Open music links: pasted in Search, `woofmusic <link>` and `woofmusic://open?url=`; Odesli API key in Integrations (`MusicLinkOpener`, `ShazamLink`, `OdesliSettingsView`)
-- [ ] Several accounts with a library each (`ProfileView`, `ProfileStorage`)
+- [x] Several accounts with a library each (`ProfileView`, `ProfileStorage`)
 
 Pages and cards [worker: pages]
 - [ ] Detail pages: Shuffle, Save album to library, Subscribe to artist and podcast, Share and copy link, Add page to queue (`PlaylistActionsMenu`)
