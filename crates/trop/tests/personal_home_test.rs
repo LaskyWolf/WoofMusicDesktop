@@ -304,7 +304,7 @@ fn a_corrupt_or_missing_saved_page_shows_nothing() {
     let mut home = HomeViewModel::new(client);
     home.saved_home = Some(dir.join("missing.json"));
     assert!(!home.show_saved_home());
-    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

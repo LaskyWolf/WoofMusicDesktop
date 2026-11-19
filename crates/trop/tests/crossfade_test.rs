@@ -1074,7 +1074,7 @@ fn transition_settings_save_with_swift_keys() {
         settings
     );
     // A missing file reads as the defaults.
-    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         trop::audio::crossfade::TransitionSettings::load(&path),
         Default::default()

@@ -1874,6 +1874,6 @@ mod tests {
         save_latest(&new, &path, 2, &latest).unwrap();
         save_latest(&old, &path, 1, &latest).unwrap();
         assert_eq!(SettingsStore::load(&path).accent_name, "new");
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

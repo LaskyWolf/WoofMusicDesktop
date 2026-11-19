@@ -122,7 +122,7 @@ async fn download_records_the_row_and_delete_removes_it() {
     manager.delete("vid_123456").unwrap();
     assert!(!path.exists());
     assert!(manager.local_path("vid_123456").is_none());
-    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// One HTTP 200 answer: the first half of `len` bytes, the rest once `rest` fires.
@@ -196,7 +196,7 @@ async fn download_again_after_cancel_survives_the_cancelled_run() {
     assert_eq!(second.await.unwrap(), Ok(true));
     let path = manager.local_path("vid_retry01").unwrap();
     assert_eq!(std::fs::metadata(path).unwrap().len(), 200_000);
-    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -249,7 +249,7 @@ async fn a_batch_counts_saved_and_failed_songs_and_delete_all_empties_it() {
     assert!(manager.tracks().unwrap().is_empty());
     assert!(manager.downloads().is_empty());
     assert_eq!(manager.total_storage_bytes(), 0);
-    std::fs::remove_dir_all(&dir).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn plain_song(id: &str) -> SongItem {

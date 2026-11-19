@@ -231,7 +231,7 @@ fn migrations_are_idempotent_on_reopen() {
     // Running the migrator again changes nothing.
     let mut raw = Connection::open(&path).unwrap();
     migrate(&mut raw).unwrap();
-    std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn open_falls_back_to_temporary_storage() {
     assert!(!db.uses_temporary_storage());
     assert!(db.fetch_one::<SongEntity>("v1").unwrap().is_none());
     for p in [path, other] {
-        std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 }
 

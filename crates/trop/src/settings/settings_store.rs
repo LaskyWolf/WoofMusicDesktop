@@ -487,7 +487,7 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains(r#""settings.audioQuality":"low""#));
         assert_eq!(SettingsStore::load(&path), settings);
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(loaded.default_tab, 0);
         std::fs::write(&path, "[1,2").unwrap();
         assert_eq!(SettingsStore::load(&path), SettingsStore::default());
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -533,7 +533,7 @@ mod tests {
         let loaded: SettingsStore = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(loaded.accent_name.len() >= 4000);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
-        std::fs::remove_dir_all(dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
