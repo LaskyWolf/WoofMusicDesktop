@@ -3675,4 +3675,52 @@ mod tests {
         let top = db.fetch_top_songs(100).unwrap();
         assert_eq!(top[0].title, "Title A");
     }
+
+    fn explore_data() -> Vec<ExploreSection> {
+        use trop::networking::models::home_page::ExploreSectionKind;
+        let mood = |t: &str| MoodItem::new(t, Some("p".into()), None);
+        vec![
+            ExploreSection::new(
+                "Moods & genres",
+                ExploreSectionKind::Moods,
+                vec![],
+                vec![mood("Pop"), mood("K-Pop"), mood("Chill"), mood("Rock")],
+            ),
+            ExploreSection::new(
+                "New albums & singles",
+                ExploreSectionKind::Cards,
+                vec![],
+                vec![],
+            ),
+            ExploreSection::new("", ExploreSectionKind::Moods, vec![], vec![mood("")]),
+        ]
+    }
+
+    #[test]
+    fn explore_family_chip_toggles_and_survives_rapid_clicks() {
+        let mut app = app();
+        app.explore = Some(Load::Loaded(explore_data()));
+        app.stack[0].route = Route::Explore;
+        for _ in 0..3 {
+            let _ = app.update(Message::ExploreFamily(Some("Pop".into())));
+        }
+        assert_eq!(app.explore_family.as_deref(), Some("Pop"));
+        let _ = app.update(Message::ExploreFamily(None));
+        assert_eq!(app.explore_family, None);
+        let _ = app.update(Message::ExploreFamily(Some("Nope".into())));
+        let _ = app.view();
+    }
+
+    #[test]
+    fn explore_path_returns_to_explore_with_the_family_and_no_way_back() {
+        let mut app = app();
+        app.explore = Some(Load::Loaded(explore_data()));
+        let _ = app.update(Message::ExplorePath("Pop".into()));
+        assert_eq!(app.stack.len(), 1);
+        assert_eq!(*app.route(), Route::Explore);
+        assert_eq!(app.explore_family.as_deref(), Some("Pop"));
+        let _ = app.update(Message::Back);
+        assert_eq!(*app.route(), Route::Explore);
+        let _ = app.view();
+    }
 }
