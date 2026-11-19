@@ -1,4 +1,4 @@
-//! The pages: Home, Explore, Search, album, artist, playlist, podcast, mood, Library, Liked Songs, My Top 100.
+//! The pages: Home, Explore, album, artist, playlist, podcast, mood, Library, Liked Songs, My Top 100.
 
 use std::sync::Arc;
 
@@ -15,7 +15,6 @@ use trop::networking::models::home_page::{
 };
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::playback::episode_playback_store::EpisodePlaybackStore;
-use trop::search::search_parser::SearchSection;
 
 use crate::collections::{self, Caps, Ctx};
 use crate::playlist_edit;
@@ -24,8 +23,6 @@ use crate::settings;
 use crate::ui::{self, Covers};
 use crate::{Load, Message, Route, theme};
 use trop::settings::settings_store::LibraryLayout;
-
-pub const SEARCH_INPUT: &str = "search";
 
 pub fn home<'a>(
     covers: &'a Covers,
@@ -248,42 +245,6 @@ fn moods<'a>(title: impl text::IntoFragment<'a>, moods: Vec<MoodItem>) -> Elemen
     ]
     .spacing(14)
     .into()
-}
-
-/// Search field and results. Results are `None` before the first search.
-pub fn search<'a>(
-    covers: &'a Covers,
-    query: &'a str,
-    results: Option<&'a Load<Vec<SearchSection>>>,
-    playing: Option<&str>,
-) -> Element<'a, Message> {
-    let field = text_input("Songs, albums, artists, playlists, podcasts", query)
-        .id(SEARCH_INPUT)
-        .on_input(Message::SearchInput)
-        .on_submit(Message::SearchSubmit)
-        .size(16)
-        .padding([12, 16])
-        .style(ui::field_style);
-    let mut page = vec![container(field).max_width(640).into()];
-    match results {
-        None => {}
-        Some(Load::Loading) => page.push(text("Searching…").color(theme::SECONDARY).into()),
-        Some(Load::Failed(error)) => page.push(
-            text(format!("Search failed: {error}. Press Enter to try again."))
-                .color(theme::SECONDARY)
-                .into(),
-        ),
-        Some(Load::Loaded(sections)) if sections.is_empty() => {
-            page.push(text("No results").color(theme::SECONDARY).into());
-        }
-        Some(Load::Loaded(sections)) => page.extend(
-            sections
-                .iter()
-                .filter(|section| !section.items.is_empty())
-                .map(|section| ui::section(covers, &section.title, &section.items, 12, playing)),
-        ),
-    }
-    ui::scroll_page(page)
 }
 
 pub fn album<'a>(

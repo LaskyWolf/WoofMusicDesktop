@@ -4,8 +4,9 @@
 //!
 //! Not ported: theme mode and the left-handed tab bar (the desktop app has
 //! one dark look and no tab bar), player style, artwork swipe, Listen
-//! Together, Wi-Fi Only downloads (the desktop cannot tell a metered connection), translation, incognito and search history. The
-//! equalizer lives in `audio::now_playing::PlayerDefaults`.
+//! Together, Wi-Fi Only downloads (the desktop cannot tell a metered
+//! connection) and translation. The equalizer lives in
+//! `audio::now_playing::PlayerDefaults`.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,7 @@ use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::library_sync_models::LibrarySyncOptions;
 
 use crate::audio::lyrics::lyrics_manager::LyricsSettings;
+use crate::search::search_view_model::SearchSort;
 use crate::services::personalization_service::{RadioOptions, RadioStyle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +220,18 @@ pub struct SettingsStore {
     // Privacy
     #[serde(rename = "settings.trackPlayHistory")]
     pub track_play_history: bool,
+    #[serde(rename = "settings.trackSearchHistory")]
+    pub track_search_history: bool,
+    /// Searches, plays, scrobbles and Discord stay unrecorded; no suggestions are asked for.
+    #[serde(rename = "settings.isIncognito")]
+    pub is_incognito: bool,
+
+    // Search (Swift keeps these in `SearchViewModel`'s defaults)
+    /// Recent searches, newest first.
+    #[serde(rename = "Search.history")]
+    pub search_history: Vec<String>,
+    #[serde(rename = "Search.sort")]
+    pub search_sort: SearchSort,
     /// "2026-9": the month whose Recap card ✕ hid from Home.
     #[serde(rename = "recap.dismissedMonth")]
     pub recap_dismissed_month: String,
@@ -273,6 +287,10 @@ impl Default for SettingsStore {
             disabled_lyrics_providers: Vec::new(),
             lyrics_provider_order: Vec::new(),
             track_play_history: true,
+            track_search_history: true,
+            is_incognito: false,
+            search_history: Vec::new(),
+            search_sort: SearchSort::Relevant,
             recap_dismissed_month: String::new(),
             listen_together_server_url: crate::listen_together::DEFAULT_SERVER_URL.to_owned(),
             listen_together_username: String::new(),

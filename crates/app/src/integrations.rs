@@ -81,7 +81,8 @@ pub enum Action {
 type Reply = oneshot::Sender<Result<Status, String>>;
 
 enum Command {
-    Tick(Option<Box<Now>>),
+    /// What plays, and whether incognito is on.
+    Tick(Option<Box<Now>>, bool),
     Request(Action, Reply),
     LastFmSignedIn(Result<(), String>, Reply),
     /// Swift `LikeStore.toggle`: a like loves the track on Last.fm.
@@ -114,8 +115,9 @@ static COMMANDS: LazyLock<mpsc::UnboundedSender<Command>> = LazyLock::new(|| {
     sender
 });
 
-/// Reports what plays. Cheap: the thread does the work.
-pub fn tick(player: &Player) {
+/// Reports what plays. Cheap: the thread does the work. While `incognito`
+/// nothing is scrobbled and Discord shows nothing (Swift `isIncognito`).
+pub fn tick(player: &Player, incognito: bool) {
     let now = player.song().map(|song| {
         Box::new(Now {
             song: song.clone(),
@@ -129,7 +131,7 @@ pub fn tick(player: &Player) {
             at: SystemTime::now(),
         })
     });
-    let _ = COMMANDS.unbounded_send(Command::Tick(now));
+    let _ = COMMANDS.unbounded_send(Command::Tick(now, incognito));
 }
 
 /// Loves or un-loves `song` on Last.fm, when it is connected.
@@ -218,13 +220,16 @@ impl Worker {
 
     async fn handle(&mut self, command: Command) {
         match command {
-            Command::Tick(now) => {
+            Command::Tick(now, incognito) => {
+                self.last_fm.incognito = incognito;
+                self.listen_brainz.incognito = incognito;
                 let at = now.as_ref().map_or_else(SystemTime::now, |now| now.at);
                 let playing = now.as_deref().map(Now::playing_song);
                 self.last_fm.sync_state(playing.as_ref(), at).await;
                 self.listen_brainz.tick(playing.as_ref(), at).await;
-                self.discord.sync(now.as_deref());
-                self.now = now;
+                // Swift `syncDiscordState`: incognito clears the presence.
+                self.now = now.filter(|_| !incognito);
+                self.discord.sync(self.now.as_deref());
             }
             Command::Request(Action::LastFmSignIn, reply) => {
                 match self.start_last_fm_sign_in().await {

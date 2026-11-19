@@ -20,6 +20,7 @@ mod pages;
 mod playlist_edit;
 mod problems;
 mod profile;
+mod search;
 mod services;
 mod settings;
 mod share_card;
@@ -59,7 +60,6 @@ use trop::detail::detail_models::{
 use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem};
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::playback::episode_playback_store::{self, EpisodePlaybackStore};
-use trop::search::search_parser::SearchSection;
 use trop::services::personalization_service::RadioOptions;
 
 use pages::LibraryFilter;
@@ -305,10 +305,7 @@ struct App {
     /// The family chip chosen on Explore.
     explore_family: Option<String>,
     details: HashMap<String, Load<Arc<Detail>>>,
-    query: String,
-    /// The query the results belong to.
-    searched: String,
-    results: Option<Load<Vec<SearchSection>>>,
+    search: search::State,
     covers: ui::Covers,
     /// `None` until Library first opens; reloaded each time it opens.
     library: Option<Load<Library>>,
@@ -445,12 +442,10 @@ pub enum Message {
     HomeLoaded(Result<Vec<HomeSection>, String>),
     ExploreLoaded(Result<Vec<ExploreSection>, String>),
     DetailLoaded(String, Result<Arc<Detail>, String>),
-    SearchInput(String),
-    SearchSubmit,
+    Search(search::Msg),
     /// A music link from the search box or the command line.
     OpenLink(String),
     LinkOpened(u64, Result<services::LinkTarget, String>),
-    SearchLoaded(String, Result<Vec<SearchSection>, String>),
     /// Reload the page on screen after a failure.
     Retry,
     Cover(String, Option<iced::widget::image::Handle>),
@@ -588,9 +583,7 @@ impl App {
             // Dev aid: WOOF_FAMILY=Pop opens Explore with that family chosen.
             explore_family: std::env::var("WOOF_FAMILY").ok(),
             details: HashMap::new(),
-            query: String::new(),
-            searched: String::new(),
-            results: None,
+            search: search::State::default(),
             covers: HashMap::new(),
             library: None,
             library_filter: None,
@@ -675,8 +668,8 @@ impl App {
         // Dev aid: WOOF_SEARCH=query searches at start.
         let search = match std::env::var("WOOF_SEARCH") {
             Ok(query) => {
-                app.query = query;
-                Task::done(Message::SearchSubmit)
+                app.search.query = query;
+                Task::done(Message::Search(search::Msg::Submit))
             }
             Err(_) => {
                 launch_link().map_or(Task::none(), |link| Task::done(Message::OpenLink(link)))
@@ -729,7 +722,11 @@ impl App {
     /// Persist Queue is on.
     // ponytail: writes on the UI thread; the file is small and changes only with the queue.
     fn persist_queue(&mut self) {
-        if !self.settings.prefs.persist_queue || self.player.queue.is_saved_as(&self.saved_queue) {
+        let prefs = &self.settings.prefs;
+        if !prefs.persist_queue
+            || prefs.is_incognito
+            || self.player.queue.is_saved_as(&self.saved_queue)
+        {
             return;
         }
         self.saved_queue = self.player.queue.saved();
@@ -1138,51 +1135,9 @@ impl App {
                 self.details.insert(key, loaded(result));
                 Task::batch([covers, album])
             }
-            Message::SearchInput(query) => {
-                self.query = query;
-                Task::none()
-            }
-            Message::SearchSubmit => {
-                let query = self.query.trim().to_owned();
-                if query.is_empty() {
-                    return Task::none();
-                }
-                if is_music_link(&query) {
-                    return self.update(Message::OpenLink(query));
-                }
-                self.searched = query.clone();
-                self.results = Some(Load::Loading);
-                Task::perform(self.services.clone().search(query.clone()), move |result| {
-                    Message::SearchLoaded(query.clone(), result)
-                })
-            }
-            Message::SearchLoaded(query, result) => {
-                if query != self.searched {
-                    return Task::none();
-                }
-                let covers = match &result {
-                    Ok(sections) => self.fetch_covers(
-                        sections
-                            .iter()
-                            .flat_map(|section| section.items.iter().take(12))
-                            .filter_map(|item| item.thumbnail_url().map(str::to_owned))
-                            .collect::<Vec<_>>(),
-                    ),
-                    Err(_) => Task::none(),
-                };
-                let autoplay = match &result {
-                    Ok(sections) if dev_autoplay(true) && self.player.song().is_none() => sections
-                        .iter()
-                        .map(|section| ui::songs_of(&section.items))
-                        .find(|songs| !songs.is_empty()),
-                    _ => None,
-                };
-                self.results = Some(loaded(result));
-                match autoplay {
-                    Some(songs) => Task::batch([covers, self.play(songs, 0)]),
-                    None => covers,
-                }
-            }
+            Message::Search(msg) => self
+                .search
+                .update(msg, &self.services, &self.settings.prefs),
             Message::Retry => {
                 match self.route().clone() {
                     Route::Home => self.home = Load::Loading,
@@ -1498,7 +1453,7 @@ impl App {
             Message::Tick => {
                 let was = self.player.state;
                 self.read_player();
-                integrations::tick(&self.player);
+                integrations::tick(&self.player, self.settings.prefs.is_incognito);
                 let now = Instant::now();
                 self.plays
                     .set_playing(self.player.state == PlayState::Playing, now);
@@ -1650,7 +1605,7 @@ impl App {
                 ])
             }
             Route::Library => Task::none(),
-            Route::Search => focus(pages::SEARCH_INPUT),
+            Route::Search => focus(search::INPUT),
             Route::Settings => Task::batch([settings::load(), self.settings.stats(&self.services)]),
             Route::Equalizer => Task::none(),
             Route::Profile => {
@@ -1707,7 +1662,8 @@ impl App {
         if last {
             self.report = None;
         }
-        for record in records {
+        // Incognito: songs stay out of YouTube Music's history.
+        for record in records.iter().filter(|_| !self.settings.prefs.is_incognito) {
             if let PlayRecord::Playback { video_id, ms } = record {
                 let report = Arc::new(YouTubeHistoryReport::new(video_id));
                 // A play recorded as it ends has no later reports.
@@ -2070,6 +2026,7 @@ impl App {
         let long = self.player.duration >= 600.0 || is_episode(song);
         if self.player.state != PlayState::Playing
             || !long
+            || self.settings.prefs.is_incognito
             || !self.episodes.save_position(
                 &song.video_id,
                 self.player.position,
@@ -2666,7 +2623,7 @@ impl App {
                     self.sign_in_error,
                 ),
             },
-            Route::Search => pages::search(covers, &self.query, self.results.as_ref(), playing),
+            Route::Search => self.search.view(covers, &self.settings.prefs, playing),
             Route::Settings => self.settings.view(
                 self.transitions.as_ref().map(|t| &t.settings),
                 self.defaults.skip_non_music,
@@ -3467,9 +3424,7 @@ mod tests {
             explore: None,
             explore_family: None,
             details: HashMap::new(),
-            query: String::new(),
-            searched: String::new(),
-            results: None,
+            search: search::State::default(),
             covers: HashMap::new(),
             library: None,
             library_filter: None,

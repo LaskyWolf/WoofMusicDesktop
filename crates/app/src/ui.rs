@@ -57,11 +57,26 @@ pub fn section<'a>(
     limit: usize,
     playing: Option<&str>,
 ) -> Element<'a, Message> {
+    column![
+        section_title(title),
+        section_items(covers, items, limit, playing)
+    ]
+    .spacing(14)
+    .into()
+}
+
+/// A section's body without its title.
+pub fn section_items<'a>(
+    covers: &'a Covers,
+    items: &'a [YTItem],
+    limit: usize,
+    playing: Option<&str>,
+) -> Element<'a, Message> {
     let songs = songs_of(items);
     let items = items.iter().take(limit);
     let songs_only = items.clone().all(|item| matches!(item, YTItem::Song(_)));
     let is_playing = |item: &YTItem| playing.is_some() && item.video_id() == playing;
-    let body: Element<'a, Message> = if songs_only {
+    if songs_only {
         iced::widget::Row::with_children(
             items.map(|item| song_cell(covers, item, &songs, is_playing(item))),
         )
@@ -77,8 +92,7 @@ pub fn section<'a>(
         .wrap()
         .vertical_spacing(24)
         .into()
-    };
-    column![section_title(title), body].spacing(14).into()
+    }
 }
 
 pub fn section_title<'a>(title: impl text::IntoFragment<'a>) -> iced::widget::Text<'a> {

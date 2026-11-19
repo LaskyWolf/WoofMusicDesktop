@@ -1,6 +1,6 @@
 //! The app's link to YouTube Music and libmpv: loads pages, covers and streams.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use iced::widget::image;
@@ -44,6 +44,7 @@ use trop::playback::playback_state_service::{PlayRecord, save};
 use trop::playback::youtube_history_report::YouTubeHistoryReport;
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::search::search_view_model;
 use trop::services::comments_service::CommentsService;
 use trop::services::download_manager::{DownloadManager, Resolved};
 use trop::services::downloaded_collections::DownloadedCollections;
@@ -280,12 +281,49 @@ impl Services {
         Ok(explore.sections)
     }
 
-    pub async fn search(self: Arc<Self>, query: String) -> Result<Vec<SearchSection>, String> {
+    /// YouTube Music's results with the artist hero lifted out, and the
+    /// library's matches (empty when the database cannot be read).
+    pub async fn search(self: Arc<Self>, query: String) -> Result<crate::search::Results, String> {
+        let db = self.db.clone();
+        let local_query = query.clone();
+        // Starts at once, so the library is read while YouTube answers.
+        let library =
+            tokio::task::spawn_blocking(move || SearchService::local_search(&db, &local_query));
+        let mut sections = self.web_search(&query).await?;
+        let hero = search_view_model::extract_hero(&mut sections, &query);
+        Ok(crate::search::Results {
+            sections,
+            hero,
+            library: library.await.ok().and_then(Result::ok).unwrap_or_default(),
+        })
+    }
+
+    /// YouTube Music's results for `query`, as the parser reads them.
+    async fn web_search(&self, query: &str) -> Result<Vec<SearchSection>, String> {
         let json = SearchService::new(self.client.clone())
-            .search(&query, None, YouTubeClient::WEB_REMIX)
+            .search(query, None, YouTubeClient::WEB_REMIX)
             .await
             .map_err(|error| error.to_string())?;
         Ok(SearchParser::parse_search_results(&json))
+    }
+
+    /// YouTube Music's completions for `query` in the content country.
+    pub async fn suggestions(self: Arc<Self>, query: String) -> Vec<String> {
+        let country = self.settings().content_country;
+        SearchService::new(self.client.clone())
+            .suggestions(&query, &country)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Latest play per song, for the Recently Played sort.
+    pub async fn recency(self: Arc<Self>) -> HashMap<String, std::time::SystemTime> {
+        let db = self.db.clone();
+        blocking(move || db.fetch_history(Some(200)))
+            .await
+            .and_then(Result::ok)
+            .map(|entries| search_view_model::recency_map(&entries))
+            .unwrap_or_default()
     }
 
     /// The data of an album, artist, playlist or mood page.
@@ -385,8 +423,9 @@ impl Services {
     }
 
     pub async fn save_plays(self: Arc<Self>, song: Option<SongItem>, records: Vec<PlayRecord>) {
-        // Swift "Track Play History" off: playback is not recorded.
-        if !self.settings().track_play_history {
+        // Swift "Track Play History" off, or incognito: playback is not recorded.
+        let settings = self.settings();
+        if !settings.track_play_history || settings.is_incognito {
             return;
         }
         let db = self.db.clone();
@@ -767,8 +806,7 @@ impl Services {
             .and_then(|html| music_link::shazam_track(&html))
             .ok_or(unreadable)?;
         let sections = self
-            .clone()
-            .search(format!("{} {}", track.title, track.artist))
+            .web_search(&format!("{} {}", track.title, track.artist))
             .await
             .map_err(|_| {
                 format!(

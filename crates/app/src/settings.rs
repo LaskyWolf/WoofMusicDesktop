@@ -719,12 +719,17 @@ impl State {
             ),
             (
                 "Privacy",
-                "When off, the songs you play are not recorded here: no play counts, no My Top 100.",
-                group(vec![toggle_row(
-                    "Track Play History",
-                    prefs.track_play_history,
-                    |p, on| p.track_play_history = on,
-                )]),
+                "When off, searches and playback are not recorded here: no recent searches, no play counts, no My Top 100.",
+                group(vec![
+                    toggle_row(
+                        "Track Search History",
+                        prefs.track_search_history,
+                        |p, on| p.track_search_history = on,
+                    ),
+                    toggle_row("Track Play History", prefs.track_play_history, |p, on| {
+                        p.track_play_history = on
+                    }),
+                ]),
             ),
             (
                 "Library Sync",
@@ -1725,7 +1730,7 @@ fn arrow_button<'a>(
     crate::transport_button(glyph, 18.0, message).into()
 }
 
-fn pick_style(_: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
+pub(crate) fn pick_style(_: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
     pick_list::Style {
         text_color: theme::TEXT,
         placeholder_color: theme::SECONDARY,
@@ -1738,7 +1743,7 @@ fn pick_style(_: &iced::Theme, status: pick_list::Status) -> pick_list::Style {
     }
 }
 
-fn menu_style(_: &iced::Theme) -> iced::overlay::menu::Style {
+pub(crate) fn menu_style(_: &iced::Theme) -> iced::overlay::menu::Style {
     iced::overlay::menu::Style {
         background: Background::Color(Color::from_rgb8(0x1C, 0x1C, 0x1E)),
         border: Border::default().rounded(12),
