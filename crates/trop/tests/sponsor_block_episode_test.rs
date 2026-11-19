@@ -69,6 +69,49 @@ fn sponsor_block_skips_each_segment_once() {
 }
 
 #[test]
+fn odd_segments_never_skip_backwards_or_loop() {
+    let mut block = SponsorBlock::default();
+    block.track("v");
+    block.found(
+        "v",
+        vec![
+            Segment {
+                start: -5.0,
+                end: -1.0,
+            },
+            Segment {
+                start: 50.0,
+                end: 40.0,
+            },
+            Segment {
+                start: 10.0,
+                end: 30.0,
+            },
+            Segment {
+                start: 20.0,
+                end: 60.0,
+            },
+            Segment {
+                start: 900.0,
+                end: 999.0,
+            },
+        ],
+    );
+    assert_eq!(block.skip_to(0.0), None);
+    assert_eq!(block.skip_to(12.0), Some(30.0));
+    assert_eq!(block.skip_to(30.0), Some(60.0));
+    assert_eq!(block.skip_to(30.0), None);
+    assert_eq!(block.skip_to(45.0), None);
+}
+
+#[test]
+fn a_saved_position_past_the_end_starts_over() {
+    let mut store = EpisodePlaybackStore::default();
+    assert!(store.save_position("ep", 5000.0, 3600.0, 1000.0));
+    assert_eq!(store.position("ep").unwrap().resume_at(), None);
+}
+
+#[test]
 fn episodes_resume_until_nearly_finished() {
     let mut store = EpisodePlaybackStore::default();
     assert!(store.save_position("ep", 600.0, 3600.0, 1000.0));

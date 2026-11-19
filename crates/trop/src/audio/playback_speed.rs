@@ -37,13 +37,20 @@ impl PlaybackSpeed {
         }
         self.video_id = Some(video_id.to_owned());
         self.is_episode = is_episode;
-        self.rate = if is_episode { self.podcast_rate } else { 1.0 };
+        self.rate = if is_episode && self.podcast_rate.is_finite() {
+            self.podcast_rate.clamp(LOWEST, HIGHEST)
+        } else {
+            1.0
+        };
         self.rate
     }
 
     /// Sets the speed the user chose, snapped to `STEP`; an episode's speed
     /// is remembered for the next episodes. `None` when nothing changed.
     pub fn set(&mut self, value: f64) -> Option<f64> {
+        if value.is_nan() {
+            return None;
+        }
         // n / 20 rather than n × 0.05, so 1.25 and 1.5 come out exact.
         let steps = (1.0 / STEP).round();
         let snapped = ((value * steps).round() / steps).clamp(LOWEST, HIGHEST);

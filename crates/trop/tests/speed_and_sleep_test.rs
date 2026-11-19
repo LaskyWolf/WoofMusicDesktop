@@ -23,6 +23,23 @@ fn speed_resets_for_songs_and_remembers_podcasts() {
 }
 
 #[test]
+fn speed_stays_in_range_for_bad_values() {
+    let mut speed = PlaybackSpeed::default();
+    speed.select("song", false);
+    assert_eq!(speed.set(f64::NAN), None);
+    assert_eq!(speed.rate, 1.0);
+    assert_eq!(speed.set(-4.0), Some(0.5));
+    assert_eq!(speed.set(f64::INFINITY), Some(3.0));
+    // A hand-edited settings file must not start an episode at 0x or 99x.
+    for bad in [0.0, 99.0, f64::NAN] {
+        let mut speed = PlaybackSpeed::default();
+        speed.podcast_rate = bad;
+        let rate = speed.select("episode", true);
+        assert!((0.5..=3.0).contains(&rate), "{bad} gave {rate}");
+    }
+}
+
+#[test]
 fn sleep_timer_counts_down_once() {
     let now = Instant::now();
     let mut timer = SleepTimer::default();
