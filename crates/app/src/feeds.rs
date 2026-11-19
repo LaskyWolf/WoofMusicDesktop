@@ -35,7 +35,8 @@ pub struct Feeds {
 #[derive(Debug, Clone)]
 pub enum Msg {
     LocalLoaded(Result<Vec<HistoryEntry>, String>),
-    RemoteLoaded(Result<Vec<RemoteSection>, String>),
+    /// Tagged with the session's load count, so an answer for a previous session is dropped.
+    RemoteLoaded(u64, Result<Vec<RemoteSection>, String>),
     Query(String),
     /// The next page of older plays from this app.
     More,
@@ -50,9 +51,10 @@ impl Feeds {
     /// History opened: plays from this app, then YouTube Music's own history when signed in.
     pub fn enter_history(&mut self, services: &Arc<Services>, signed_in: bool) -> Task<Message> {
         let remote = if signed_in {
+            let load = self.load;
             Task::perform(
                 HistoryViewModel::read_remote(services.client.clone()),
-                |result| Message::Feeds(Msg::RemoteLoaded(result)),
+                move |result| Message::Feeds(Msg::RemoteLoaded(load, result)),
             )
         } else {
             Task::none()
@@ -181,12 +183,13 @@ impl Feeds {
                 self.history.is_loading = false;
                 Task::none()
             }
-            Msg::RemoteLoaded(Ok(sections)) => {
+            Msg::RemoteLoaded(load, _) if load != self.load => Task::none(),
+            Msg::RemoteLoaded(_, Ok(sections)) => {
                 self.history.set_remote(sections);
                 Task::none()
             }
             // Signed out or offline: the list stays local.
-            Msg::RemoteLoaded(Err(error)) => {
+            Msg::RemoteLoaded(_, Err(error)) => {
                 log::info!("YouTube Music history not loaded: {error}");
                 Task::none()
             }
@@ -230,5 +233,29 @@ impl Feeds {
                 Task::done(Message::Navigate(Route::Album(album)))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_of_a_previous_session_is_dropped_after_sign_out() {
+        let services = Services::for_test();
+        let mut feeds = Feeds::default();
+        // A remote history read starts, then the session changes before it answers.
+        let old_load = feeds.load;
+        feeds.reset();
+        let song = trop::networking::models::yt_item::SongItem {
+            video_id: "old".into(),
+            ..Default::default()
+        };
+        let _ = feeds.update(
+            Msg::RemoteLoaded(old_load, Ok(vec![("Today".into(), vec![song])])),
+            &services,
+        );
+        let rows: usize = feeds.history.days.iter().map(|day| day.rows.len()).sum();
+        assert_eq!(rows, 0);
     }
 }
