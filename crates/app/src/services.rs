@@ -27,17 +27,20 @@ use trop::audio::lyrics::providers::lyrics_provider::LyricsQuery;
 use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::audio::sponsor_block::{self, Segment};
-use trop::database::database_service::DatabaseService;
+use trop::database::database_service::{ConflictResolution, DatabaseService};
+use trop::database::entities::episode_entity::EpisodeEntity;
 use trop::database::entities::format_entity::FormatEntity;
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::database::entities::song_entity::SongEntity;
 use trop::detail::album_detail_parser::AlbumDetailParser;
 use trop::detail::artist_detail_parser::ArtistDetailParser;
+use trop::detail::detail_models::PodcastDetailInfo;
 use trop::detail::playlist_detail_parser::PlaylistDetailParser;
 use trop::detail::podcast_detail_parser::PodcastDetailParser;
 use trop::explore::explore_view_model::ExploreViewModel;
-use trop::home::home_view_model::HomeViewModel;
-use trop::networking::models::home_page::{ExploreSection, HomeSection};
+use trop::home::home_view_model::{HomeViewModel, SavedHome};
+use trop::home::mixes::Mix;
+use trop::networking::models::home_page::{ExploreSection, HomePageChip, HomeSection};
 use trop::networking::models::yt_item::{
     AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTArtist, YTItem,
 };
@@ -96,6 +99,14 @@ pub struct Services {
     pub comments: Arc<CommentsService>,
     /// The app's copy, for the requests that read a setting.
     settings: std::sync::RwLock<SettingsStore>,
+    /// Home's pages and sections; one load, chip or next page at a time.
+    home: tokio::sync::Mutex<HomeViewModel>,
+}
+
+fn home_model(client: &Arc<InnerTubeClient>) -> tokio::sync::Mutex<HomeViewModel> {
+    let mut home = HomeViewModel::new(client.clone());
+    home.saved_home = SavedHome::default_path();
+    tokio::sync::Mutex::new(home)
 }
 
 /// A song's lyrics as Now Playing lists them.
@@ -154,6 +165,7 @@ impl Services {
                     .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-lyrics.json")),
             )),
             comments: Arc::new(CommentsService::new(client.clone())),
+            home: home_model(&client),
             client,
             player,
             db,
@@ -270,13 +282,107 @@ impl Services {
         self.lyrics.state().refresh_token
     }
 
-    pub async fn load_home(self: Arc<Self>) -> Result<Vec<HomeSection>, String> {
+    // MARK: - Home (Swift `HomeViewModel.load`)
+
+    /// The sections from the library, and the page saved at the last launch
+    /// when there is one (`has_page`).
+    pub async fn home_start(self: Arc<Self>) -> HomeFeed {
         let settings = self.settings();
-        let mut home = HomeViewModel::new(self.client.clone());
+        let mut home = self.home.lock().await;
         home.hide_explicit = settings.hide_explicit;
         home.show_quick_picks = settings.show_quick_picks;
-        home.load().await.map_err(|error| error.to_string())?;
-        Ok(home.home_sections())
+        home.reset();
+        home.load_local_sections(&self.db, QUICK_PICKS_COUNT);
+        home.show_saved_home();
+        HomeFeed::of(&home)
+    }
+
+    /// YouTube's first page, and more pages until Quick Picks shows up.
+    /// Offline, the sections from the library still show; the error comes
+    /// only when there is nothing at all.
+    pub async fn home_fetch(self: Arc<Self>) -> Result<HomeFeed, String> {
+        let mut home = self.home.lock().await;
+        let result = home.load().await;
+        let feed = HomeFeed::of(&home);
+        match result {
+            Err(error) if feed.sections.is_empty() => Err(error.to_string()),
+            _ => Ok(feed),
+        }
+    }
+
+    /// Daily Discover, community playlists and "Similar to", for an account.
+    pub async fn home_phase2(self: Arc<Self>) -> HomeFeed {
+        let sections = personalization_service::build_phase2_sections(&self.client, &self.db).await;
+        let mut home = self.home.lock().await;
+        home.phase2_sections = sections;
+        HomeFeed::of(&home)
+    }
+
+    /// Opens a mood chip's feed, or closes it (`None` or the open chip).
+    pub async fn home_chip(self: Arc<Self>, chip: Option<HomePageChip>) -> HomeFeed {
+        let mut home = self.home.lock().await;
+        home.toggle_chip(chip).await;
+        HomeFeed::of(&home)
+    }
+
+    /// The next page of shelves, when YouTube has one.
+    pub async fn home_more(self: Arc<Self>) -> HomeFeed {
+        let mut home = self.home.lock().await;
+        home.load_more_if_needed(0, 0).await;
+        HomeFeed::of(&home)
+    }
+
+    /// Keeps which show each episode belongs to: Home's podcast tiles light
+    /// up for the playing episode and show the last one's progress.
+    fn save_episodes(&self, info: &PodcastDetailInfo) {
+        for episode in &info.episodes {
+            let entity = EpisodeEntity {
+                id: episode.video_id.clone(),
+                title: episode.title.clone(),
+                duration: episode.duration,
+                thumbnail_url: episode.thumbnail_url.clone(),
+                podcast_id: Some(info.browse_id.clone()),
+                podcast_name: Some(info.title.clone()),
+                is_played: false,
+            };
+            if let Err(error) = self
+                .db
+                .insert_on_conflict(&entity, ConflictResolution::Ignore)
+            {
+                log::warn!("Could not save the episode {}: {error}", episode.video_id);
+            }
+        }
+    }
+
+    /// Episode video id → its show's browse id.
+    pub fn episode_shows(&self) -> HashMap<String, String> {
+        self.db
+            .read(|db| {
+                db.prepare("SELECT id, podcast_id FROM episode WHERE podcast_id IS NOT NULL")?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Songs pinned to Quick Picks, newest pin first.
+    pub fn pins(&self) -> Vec<SongItem> {
+        self.db
+            .fetch_speed_dial(None)
+            .unwrap_or_default()
+            .iter()
+            .map(|entry| entry.to_song_item())
+            .collect()
+    }
+
+    /// Swift `PinState.toggle`.
+    pub fn set_pinned(&self, song: &SongItem, pinned: bool) -> Result<(), String> {
+        let result = if pinned {
+            self.db.pin_to_speed_dial(song)
+        } else {
+            self.db.remove_from_speed_dial(&song.video_id)
+        };
+        result.map_err(|error| error.to_string())
     }
 
     /// Cover at about `px` physical pixels, from the YouTube image CDN.
@@ -358,7 +464,10 @@ impl Services {
             }
             Route::Podcast(id) => PodcastDetailParser::load(client, &id)
                 .await
-                .map(Detail::podcast)
+                .map(|info| {
+                    self.save_episodes(&info);
+                    Detail::podcast(info)
+                })
                 .map_err(|error| error.to_string()),
             Route::Mood(mood) => {
                 let sections = ExploreViewModel::load_mood_detail(client, &mood).await;
@@ -506,6 +615,10 @@ impl Services {
 
     pub async fn sign_out(self: Arc<Self>) {
         self.client.update_auth(AuthState::guest());
+        // The account's Home must not show at the next launch.
+        if let Some(path) = &self.home.lock().await.saved_home {
+            SavedHome::clear(path);
+        }
         if let Some(Err(error)) = blocking(|| keyring().clear()).await {
             eprintln!("Could not remove the saved session: {error}");
         }
@@ -1139,6 +1252,42 @@ fn webview(mode: &str, input: Option<&AuthState>) -> Option<AuthState> {
     serde_json::from_slice(&output.stdout).ok()
 }
 
+/// Swift `QuickPicksSize.count`: how many songs Quick Picks holds.
+pub const QUICK_PICKS_COUNT: usize = 18;
+
+/// What Home shows: the sections in order, the mood chips and the mixes.
+#[derive(Debug, Clone, Default)]
+pub struct HomeFeed {
+    pub sections: Vec<HomeSection>,
+    pub chips: Vec<HomePageChip>,
+    /// The open mood chip's title.
+    pub chip: Option<String>,
+    pub mixes: Vec<Mix>,
+    /// A YouTube page (fetched or saved) is in, not only the library's sections.
+    pub has_page: bool,
+    /// YouTube has another page of shelves.
+    pub has_more: bool,
+    /// The app's own flags: a chip's feed or the next page is on its way.
+    pub chip_loading: bool,
+    pub loading_more: bool,
+}
+
+impl HomeFeed {
+    fn of(home: &HomeViewModel) -> Self {
+        let page = home.home_page.as_ref();
+        Self {
+            sections: home.home_sections(),
+            chips: page.map(|p| p.chips.clone()).unwrap_or_default(),
+            chip: home.selected_chip.as_ref().map(|c| c.title.clone()),
+            mixes: home.mixes.clone(),
+            has_page: page.is_some(),
+            has_more: page.is_some_and(|p| p.continuation.is_some()),
+            chip_loading: false,
+            loading_more: false,
+        }
+    }
+}
+
 /// The library tab's content, as page items.
 #[derive(Debug, Default, Clone)]
 pub struct Library {
@@ -1334,6 +1483,7 @@ impl Services {
                 dir.join("lyrics.json"),
             )),
             comments: Arc::new(CommentsService::new(client.clone())),
+            home: tokio::sync::Mutex::new(HomeViewModel::new(client.clone())),
             client,
             player: None,
             db,

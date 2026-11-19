@@ -1,4 +1,4 @@
-//! The pages: Home, Explore, album, artist, playlist, podcast, mood, Library, Liked Songs, My Top 100.
+//! The pages (Home is in `home.rs`, Search in `search.rs`): Explore, album, artist, playlist, podcast, mood, Library, Liked Songs, My Top 100.
 
 use std::sync::Arc;
 
@@ -10,9 +10,7 @@ use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
 use trop::explore::mood_card::{MoodFamily, MoodFamilyEntry};
-use trop::networking::models::home_page::{
-    ExploreSection, ExploreSectionKind, HomeSection, MoodItem,
-};
+use trop::networking::models::home_page::{ExploreSection, ExploreSectionKind, MoodItem};
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::playback::episode_playback_store::EpisodePlaybackStore;
 
@@ -23,44 +21,6 @@ use crate::settings;
 use crate::ui::{self, Covers};
 use crate::{Load, Message, Route, theme};
 use trop::settings::settings_store::LibraryLayout;
-
-pub fn home<'a>(
-    covers: &'a Covers,
-    home: &'a Load<Vec<HomeSection>>,
-    playing: Option<&str>,
-    recap_card: Option<Element<'a, Message>>,
-) -> Element<'a, Message> {
-    let sections = match home {
-        Load::Loaded(sections) => sections,
-        Load::Loading => return ui::status(None, Message::Retry),
-        Load::Failed(error) => return ui::status(Some(error), Message::Retry),
-    };
-    // Swift shows the Recap card in Keep Listening's place.
-    let has_card = recap_card.is_some();
-    ui::scroll_page(
-        recap_card
-            .into_iter()
-            .chain(
-                sections
-                    .iter()
-                    .filter(|section| !section.items().is_empty())
-                    .filter(|section| {
-                        !(has_card && matches!(section, HomeSection::KeepListening(_)))
-                    })
-                    .map(|section| {
-                        let limit = if section.is_songs_only() { 12 } else { 10 };
-                        ui::section(
-                            covers,
-                            section.display_title(),
-                            section.items(),
-                            limit,
-                            playing,
-                        )
-                    }),
-            )
-            .collect(),
-    )
-}
 
 /// Explore feed, or a mood's page: shelves of rows and cards, mood chips.
 pub fn explore<'a>(
@@ -652,27 +612,8 @@ pub fn library<'a>(
     edit: &'a playlist_edit::State,
     layout: LibraryLayout,
 ) -> Element<'a, Message> {
-    let chips = row(LibraryFilter::ALL.map(|(chip, label)| {
-        let selected = filter == Some(chip);
-        button(text(label).size(14).font(theme::weight(Weight::Medium)))
-            .padding([7, 16])
-            .on_press(Message::LibraryFilter(chip))
-            .style(move |_, status| button::Style {
-                background: Some(Background::Color(match (selected, status) {
-                    (true, _) => theme::TEXT,
-                    (false, button::Status::Hovered) => theme::PRESSED,
-                    (false, _) => theme::HOVER,
-                })),
-                border: Border::default().rounded(18),
-                text_color: if selected {
-                    theme::BACKGROUND
-                } else {
-                    theme::TEXT
-                },
-                ..button::Style::default()
-            })
-            .into()
-    }))
+    let chips = row(LibraryFilter::ALL
+        .map(|(chip, label)| ui::chip(label, filter == Some(chip), Message::LibraryFilter(chip))))
     .spacing(8)
     .push(Space::new().width(Length::Fill))
     .push(playlist_edit::new_playlist(edit));

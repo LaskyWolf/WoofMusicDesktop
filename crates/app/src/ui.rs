@@ -526,6 +526,28 @@ pub fn pill_button<'a>(label: &'a str, message: Message) -> Element<'a, Message>
         .into()
 }
 
+/// A filter chip (Swift `FilterChipBar`): white when selected.
+pub fn chip<'a>(label: &'a str, selected: bool, message: Message) -> Element<'a, Message> {
+    button(text(label).size(14).font(theme::weight(Weight::Medium)))
+        .padding([7, 16])
+        .on_press(message)
+        .style(move |_, status| button::Style {
+            background: Some(Background::Color(match (selected, status) {
+                (true, _) => theme::TEXT,
+                (false, button::Status::Hovered) => theme::PRESSED,
+                (false, _) => theme::HOVER,
+            })),
+            border: Border::default().rounded(18),
+            text_color: if selected {
+                theme::BACKGROUND
+            } else {
+                theme::TEXT
+            },
+            ..button::Style::default()
+        })
+        .into()
+}
+
 /// Teal button with dark text: white on teal is too faint to read.
 pub fn accent_button<'a>(
     label: &'a str,

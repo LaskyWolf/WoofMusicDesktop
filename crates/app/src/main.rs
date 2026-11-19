@@ -9,6 +9,7 @@ mod downloads;
 mod equalizer;
 mod feeds;
 mod glass;
+mod home;
 mod integrations;
 mod login;
 mod looks;
@@ -57,7 +58,7 @@ use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::detail::detail_models::{
     AlbumDetailInfo, ArtistDetailInfo, PlaylistDetailInfo, PodcastDetailInfo,
 };
-use trop::networking::models::home_page::{ExploreSection, HomeSection, MoodItem};
+use trop::networking::models::home_page::{ExploreSection, MoodItem};
 use trop::networking::models::yt_item::{SongItem, YTItem};
 use trop::playback::episode_playback_store::{self, EpisodePlaybackStore};
 use trop::services::personalization_service::RadioOptions;
@@ -302,7 +303,7 @@ struct App {
     maximized: bool,
     /// Never empty: the last entry is the page on screen.
     stack: Vec<Entry>,
-    home: Load<Vec<HomeSection>>,
+    home: home::Home,
     /// `None` until Explore is first opened.
     explore: Option<Load<Vec<ExploreSection>>>,
     /// The family chip chosen on Explore.
@@ -442,7 +443,9 @@ pub enum Message {
     Synced,
     /// A filter chip: shows only that section, or everything again.
     LibraryFilter(LibraryFilter),
-    HomeLoaded(Result<Vec<HomeSection>, String>),
+    /// YouTube's Home page is in, or failed with nothing to show.
+    HomeLoaded(Result<services::HomeFeed, String>),
+    Home(home::Msg),
     ExploreLoaded(Result<Vec<ExploreSection>, String>),
     DetailLoaded(String, Result<Arc<Detail>, String>),
     Search(search::Msg),
@@ -584,7 +587,7 @@ impl App {
             services: services.clone(),
             maximized: false,
             stack,
-            home: Load::Loading,
+            home: home::Home::default(),
             explore: None,
             // Dev aid: WOOF_FAMILY=Pop opens Explore with that family chosen.
             explore_family: std::env::var("WOOF_FAMILY").ok(),
@@ -1039,7 +1042,7 @@ impl App {
                     Task::none()
                 };
                 // Home and private playlists differ per account: load them again.
-                self.home = Load::Loading;
+                self.home.feed = Load::Loading;
                 self.details.clear();
                 self.library = None;
                 self.feeds.reset();
@@ -1107,31 +1110,29 @@ impl App {
                 self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
                 scroll_page_to(0.0)
             }
-            Message::HomeLoaded(Ok(sections)) => {
+            Message::HomeLoaded(Ok(feed)) => {
                 // Dev aid: WOOF_PLAY=1 plays the first Home section with songs
                 // (with WOOF_SEARCH, the first songs found instead).
                 let autoplay = dev_autoplay(false).then(|| {
-                    sections
+                    feed.sections
                         .iter()
                         .map(|section| ui::songs_of(section.items()))
                         .find(|songs| !songs.is_empty())
                 });
-                let urls = sections
-                    .iter()
-                    .flat_map(|section| section.items().iter().take(12))
-                    .filter_map(|item| item.thumbnail_url().map(str::to_owned))
-                    .collect::<Vec<_>>();
-                self.home = Load::Loaded(sections);
-                let covers = self.fetch_covers(urls);
+                let covers = self.show_home(feed);
                 match autoplay.flatten() {
                     Some(songs) => Task::batch([covers, self.play(songs, 0)]),
                     None => covers,
                 }
             }
             Message::HomeLoaded(Err(error)) => {
-                self.home = Load::Failed(error);
+                // A failed reload keeps the page on screen (the saved one at launch).
+                if !matches!(self.home.feed, Load::Loaded(_)) {
+                    self.home.feed = Load::Failed(error);
+                }
                 Task::none()
             }
+            Message::Home(msg) => self.update_home(msg),
             Message::ExploreLoaded(result) => {
                 let covers = match &result {
                     Ok(sections) => self.fetch_covers(explore_covers(sections)),
@@ -1154,7 +1155,7 @@ impl App {
             Message::Search(msg) => self.search.update(msg, &self.services, &mut self.settings),
             Message::Retry => {
                 match self.route().clone() {
-                    Route::Home => self.home = Load::Loading,
+                    Route::Home => self.home.feed = Load::Loading,
                     Route::Explore => self.explore = None,
                     route => {
                         if let Some(key) = route.key() {
@@ -1908,6 +1909,7 @@ impl App {
                     move |details| Message::MenuDetails(id.clone(), Box::new(details)),
                 )
             }
+            Action::Pin(pinned) => self.pin(song, pinned),
             Action::RemoveFromQueue(index) => {
                 self.player.queue.remove(index);
                 Task::none()
@@ -2476,6 +2478,7 @@ impl App {
             subscriptions.push(studio.subscription());
         }
         subscriptions.push(self.together.subscription());
+        subscriptions.push(self.home_subscription());
         Subscription::batch(subscriptions)
     }
 
@@ -2603,6 +2606,11 @@ impl App {
                 room: self.together.room_code(),
                 guest: self.together.is_guest(),
                 speed: self.speed.rate,
+                pinned: self
+                    .home
+                    .pins
+                    .iter()
+                    .any(|song| song.video_id == menu.song.video_id),
                 window: self.window,
             };
             layers = layers.push(song_menu::view(menu, context));
@@ -2655,12 +2663,7 @@ impl App {
             account,
         };
         match self.route() {
-            Route::Home => pages::home(
-                covers,
-                &self.home,
-                playing,
-                self.profile.home_card(&self.settings.prefs),
-            ),
+            Route::Home => home::view(self),
             Route::Library => match &self.session {
                 Session::SignedIn(_) => match &self.library {
                     Some(Load::Loaded(library)) => pages::library(
@@ -3044,7 +3047,7 @@ fn seek_style(_: &iced::Theme, status: slider::Status) -> slider::Style {
 }
 
 fn load_home(services: &Arc<Services>) -> Task<Message> {
-    Task::perform(services.clone().load_home(), Message::HomeLoaded)
+    home::load(services)
 }
 
 fn loaded<T>(result: Result<T, String>) -> Load<T> {
@@ -3477,7 +3480,7 @@ mod tests {
                 route: Route::Home,
                 offset: 0.0,
             }],
-            home: Load::Loading,
+            home: home::Home::default(),
             explore: None,
             explore_family: None,
             details: HashMap::new(),

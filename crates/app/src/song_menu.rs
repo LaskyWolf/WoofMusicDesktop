@@ -79,6 +79,8 @@ pub struct Context<'a> {
     pub guest: bool,
     pub speed: f64,
     pub window: Size,
+    /// The song is pinned to Quick Picks.
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +118,8 @@ pub enum Action {
     /// Loads the artists' kinds for the picker.
     ShowArtists,
     ShowDetails,
+    /// Pins the song to Home's Quick Picks, or unpins it.
+    Pin(bool),
     RemoveFromQueue(usize),
     Open(Page),
     /// Starts a countdown of this many minutes, or turns the timer off.
@@ -244,6 +248,19 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
         ));
     }
     items.push(item(icons::RADIO, "Start Radio…", Action::StartRadio));
+    items.push(if context.pinned {
+        item(
+            crate::home::icons::PIN_SLASH,
+            "Unpin from Quick Picks",
+            Action::Pin(false),
+        )
+    } else {
+        item(
+            crate::home::icons::PIN,
+            "Pin to Quick Picks",
+            Action::Pin(true),
+        )
+    });
     if let Some(id) = song.album_id.clone() {
         items.push(item(
             icons::ALBUM,
