@@ -65,6 +65,8 @@ pub struct State {
     pub picked: HashSet<usize>,
     /// Saved or subscribed, by page key, over what the page loaded with.
     saved: HashMap<String, bool>,
+    /// Pages whose save or subscribe request has not answered yet.
+    saving: HashSet<String>,
     /// The podcast description is open in full.
     described: bool,
     overlay: Option<Overlay>,
@@ -250,13 +252,16 @@ impl App {
                 Task::batch([iced::clipboard::write(url), self.notify("Link copied")])
             }
             Msg::ToggleSaved => self.toggle_saved(),
-            Msg::Saved(key, on, result) => match result {
-                Ok(()) => Task::none(),
-                Err(error) => {
-                    self.collections.saved.insert(key, !on);
-                    self.notify(&error)
+            Msg::Saved(key, on, result) => {
+                self.collections.saving.remove(&key);
+                match result {
+                    Ok(()) => Task::none(),
+                    Err(error) => {
+                        self.collections.saved.insert(key, !on);
+                        self.notify(&error)
+                    }
                 }
-            },
+            }
             Msg::Select(on) => {
                 self.collections.selecting = on;
                 self.collections.picked.clear();
@@ -521,6 +526,10 @@ impl App {
             },
             _ => return Task::none(),
         };
+        // One request per page at a time: two failed answers could not be undone in order.
+        if !self.collections.saving.insert(key.clone()) {
+            return Task::none();
+        }
         let on = !now;
         self.collections.saved.insert(key.clone(), on);
         let services = self.services.clone();

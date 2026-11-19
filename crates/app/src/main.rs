@@ -3639,6 +3639,40 @@ mod tests {
     }
 
     #[test]
+    fn a_second_save_click_waits_for_the_first_answer() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        let mut app = app();
+        app.session = Session::SignedIn(None);
+        let route = Route::Podcast("P".into());
+        app.stack.push(Entry {
+            route: route.clone(),
+            offset: 0.0,
+        });
+        let info = PodcastDetailInfo {
+            browse_id: "P".into(),
+            ..PodcastDetailInfo::default()
+        };
+        let detail = Detail::Podcast {
+            info,
+            songs: Arc::new(Vec::new()),
+        };
+        app.details
+            .insert("podcast:P".into(), Load::Loaded(Arc::new(detail)));
+        let _ = app.update(Message::Pages(collections::Msg::ToggleSaved));
+        let _ = app.update(Message::Pages(collections::Msg::ToggleSaved));
+        // The second click did not undo the first while its answer is out.
+        assert_eq!(app.saved(&route), Some(true));
+        // The first request fails: back to what the server has.
+        let _ = app.update(Message::Pages(collections::Msg::Saved(
+            "podcast:P".into(),
+            true,
+            Err("offline".into()),
+        )));
+        assert_eq!(app.saved(&route), Some(false));
+    }
+
+    #[test]
     fn held_space_toggles_play_once() {
         assert!(shortcut(key(keyboard::key::Named::Space, false)).is_some());
         assert!(shortcut(key(keyboard::key::Named::Space, true)).is_none());
