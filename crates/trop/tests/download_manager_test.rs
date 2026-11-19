@@ -251,3 +251,170 @@ async fn a_batch_counts_saved_and_failed_songs_and_delete_all_empties_it() {
     assert_eq!(manager.total_storage_bytes(), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+fn plain_song(id: &str) -> SongItem {
+    SongItem {
+        video_id: id.into(),
+        title: id.into(),
+        duration: 1,
+        ..SongItem::default()
+    }
+}
+
+fn manager_in(name: &str) -> (Arc<DownloadManager>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("woof-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let manager = DownloadManager::new(Arc::new(DatabaseService::open_in_memory()), dir.clone());
+    (Arc::new(manager), dir)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_huge_batch_of_failing_songs_is_counted_and_closes() {
+    let (manager, dir) = manager_in("huge");
+    let ids: Vec<String> = (0..3000).map(|i| format!("vid_huge_{i}")).collect();
+    manager.join_batch(&ids);
+    let runs: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let (manager, song) = (manager.clone(), plain_song(id));
+            tokio::spawn(async move {
+                manager
+                    .download(song, async { Err("no stream".to_owned()) })
+                    .await
+            })
+        })
+        .collect();
+    for run in runs {
+        assert!(run.await.unwrap().is_err());
+    }
+    let batch = manager.batch_progress().unwrap();
+    assert_eq!(
+        (batch.total, batch.completed, batch.failed),
+        (3000, 0, 3000)
+    );
+    assert!(batch.is_done());
+    manager.clear_finished_batch();
+    assert_eq!(manager.batch_progress(), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_full_disk_fails_the_song_and_leaves_no_part_file() {
+    let (manager, dir) = manager_in("disk-full");
+    std::fs::create_dir_all(&dir).unwrap();
+    // The first run's token is 1: its part file is /dev/full, where every write fails.
+    std::os::unix::fs::symlink("/dev/full", dir.join(".vid_full0001.1.part")).unwrap();
+    let url = serve_once(vec![7; 20_000]);
+    let result = manager
+        .download(plain_song("vid_full0001"), async {
+            Ok(resolved(url, "audio/webm"))
+        })
+        .await;
+    assert_eq!(
+        result,
+        Err("Could not save the file. Check the disk has space.".to_owned())
+    );
+    assert!(manager.local_path("vid_full0001").is_none());
+    assert!(!dir.join(".vid_full0001.1.part").exists());
+    assert!(matches!(
+        manager.downloads()[0].state,
+        DownloadState::Failed(_)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_song_while_it_downloads_leaves_no_file_or_row() {
+    let (manager, dir) = manager_in("delete-while");
+    let (url, rest) = serve_in_two_halves(200_000);
+    let run = {
+        let (manager, song) = (manager.clone(), plain_song("vid_delwhile1"));
+        tokio::spawn(async move {
+            manager
+                .download(song, async { Ok(resolved(url, "audio/webm")) })
+                .await
+        })
+    };
+    wait_for_bytes(&manager, "vid_delwhile1").await;
+    manager.delete("vid_delwhile1").unwrap();
+    rest.send(()).unwrap();
+    assert_eq!(run.await.unwrap(), Ok(false));
+    assert!(manager.local_path("vid_delwhile1").is_none());
+    assert!(manager.tracks().unwrap().is_empty());
+    assert!(manager.downloads().is_empty());
+    let leftovers = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(leftovers, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelling_one_song_of_a_batch_and_retrying_it_keeps_the_counts_right() {
+    let (manager, dir) = manager_in("cancel-retry");
+    manager.join_batch(&["vid_cr_a".into(), "vid_cr_b".into(), "vid_cr_c".into()]);
+    let (url_a, rest_a) = serve_in_two_halves(200_000);
+    let run_a = {
+        let (manager, song) = (manager.clone(), plain_song("vid_cr_a"));
+        tokio::spawn(async move {
+            manager
+                .download(song, async { Ok(resolved(url_a, "audio/webm")) })
+                .await
+        })
+    };
+    wait_for_bytes(&manager, "vid_cr_a").await;
+    let failed = manager
+        .download(plain_song("vid_cr_b"), async { Err("x".to_owned()) })
+        .await;
+    assert!(failed.is_err());
+    // b failed, a running, c never started: 2 songs count.
+    let batch = manager.batch_progress().unwrap();
+    assert_eq!((batch.total, batch.completed, batch.failed), (2, 0, 1));
+    // Retrying b joins the same run and finishes it.
+    let url_b = serve_once(vec![7; 20_000]);
+    assert_eq!(
+        manager
+            .download(plain_song("vid_cr_b"), async {
+                Ok(resolved(url_b, "audio/webm"))
+            })
+            .await,
+        Ok(true)
+    );
+    let batch = manager.batch_progress().unwrap();
+    assert_eq!((batch.total, batch.completed, batch.failed), (2, 1, 0));
+    // Cancelling a leaves one song: no card.
+    manager.cancel("vid_cr_a");
+    rest_a.send(()).unwrap();
+    assert_eq!(run_a.await.unwrap(), Ok(false));
+    assert_eq!(manager.batch_progress(), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_song_twice_downloads_once() {
+    let (manager, dir) = manager_in("dupes");
+    manager.join_batch(&["vid_dup_a".into(), "vid_dup_a".into(), "vid_dup_b".into()]);
+    let (url, rest) = serve_in_two_halves(100_000);
+    let first = {
+        let (manager, song) = (manager.clone(), plain_song("vid_dup_a"));
+        tokio::spawn(async move {
+            manager
+                .download(song, async { Ok(resolved(url, "audio/webm")) })
+                .await
+        })
+    };
+    wait_for_bytes(&manager, "vid_dup_a").await;
+    let second = manager
+        .download(plain_song("vid_dup_a"), async { Err("never".to_owned()) })
+        .await;
+    assert_eq!(second, Ok(false));
+    rest.send(()).unwrap();
+    assert_eq!(first.await.unwrap(), Ok(true));
+    // A song saved already counts as done without a new fetch.
+    assert_eq!(
+        manager
+            .download(plain_song("vid_dup_a"), async { Err("never".to_owned()) })
+            .await,
+        Ok(true)
+    );
+    assert_eq!(manager.tracks().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
