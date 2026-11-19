@@ -111,9 +111,9 @@ Done when: a `v*` tag publishes both packages and they install on a clean system
 Found by comparing every `Trop/` Swift file with the Rust code. Owner in brackets.
 
 Home and Search [main]
-- [ ] Personal Home sections: Quick Picks from history, Keep Listening, Forgotten Favorites, Daily Discover, Similar to <artist>, community playlists (`PersonalizationService`, `HomeViewModel`)
-- [ ] Your Mixes row (`MixesRow`), Pin to Quick Picks (`PinState`), Home mood chips (`ChipsRowView`), Keep Listening strip, podcast radio dial tiles (`RadioDialTile`)
-- [ ] Last Home page shown at launch, more pages on scroll (`SavedHome`), shimmer placeholders (`ShimmerLoadingView`)
+- [x] Personal Home sections: Quick Picks from history, Keep Listening, Forgotten Favorites, Daily Discover, Similar to <artist>, community playlists (`PersonalizationService`, `HomeViewModel`)
+- [x] Your Mixes row (`MixesRow`), Pin to Quick Picks (`PinState`), Home mood chips (`ChipsRowView`), Keep Listening strip, podcast radio dial tiles (`RadioDialTile`)
+- [x] Last Home page shown at launch, more pages on scroll (`SavedHome`), shimmer placeholders (`ShimmerLoadingView`)
 - [x] Search: recent searches and the Track Search History setting, suggestions while typing, filter chips, section drill-down, sort, artist hero card, library results, incognito (`Search/`)
 - [x] Open music links: pasted in Search, `woofmusic <link>` and `woofmusic://open?url=`; Odesli API key in Integrations (`MusicLinkOpener`, `ShazamLink`, `OdesliSettingsView`)
 - [x] Several accounts with a library each (`ProfileView`, `ProfileStorage`)
