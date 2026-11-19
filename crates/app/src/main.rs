@@ -1537,6 +1537,15 @@ impl App {
             Message::Together(message) => self.update_together(message),
             Message::FetchCovers(urls) => self.fetch_covers(urls),
             Message::Feeds(message) => {
+                // The selection counts rows of the filtered list, so a changed list drops it.
+                if matches!(
+                    message,
+                    feeds::Msg::Query(_)
+                        | feeds::Msg::LocalLoaded(Ok(_))
+                        | feeds::Msg::RemoteLoaded(_, Ok(_))
+                ) {
+                    self.collections.picked.clear();
+                }
                 let task = self.feeds.update(message, &self.services);
                 let covers = self.fetch_covers(self.feeds.cover_urls());
                 Task::batch([task, covers])
@@ -3604,6 +3613,29 @@ mod tests {
         app.notice = None;
         let _ = app.update(Message::LinkOpened(first, Err("old".into())));
         assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn history_selection_is_cleared_when_the_list_changes() {
+        let mut app = app();
+        app.stack.push(Entry {
+            route: Route::History,
+            offset: 0.0,
+        });
+        let rows = |ids: &[&str]| vec![("Today".to_owned(), ids.iter().map(|i| song(i)).collect())];
+        app.feeds.history.set_remote(rows(&["a", "b", "c"]));
+        // Row 2 is "c"; typing in the search box shifts the rows under it.
+        let _ = app.update(Message::Pages(collections::Msg::Select(true)));
+        let _ = app.update(Message::Pages(collections::Msg::Pick(2)));
+        let _ = app.update(Message::Feeds(feeds::Msg::Query("Title c".into())));
+        assert!(app.collections.picked.is_empty());
+        // A late answer from YouTube Music replaces the rows too.
+        let _ = app.update(Message::Pages(collections::Msg::Pick(0)));
+        let _ = app.update(Message::Feeds(feeds::Msg::RemoteLoaded(
+            0,
+            Ok(rows(&["x", "y"])),
+        )));
+        assert!(app.collections.picked.is_empty());
     }
 
     #[test]
