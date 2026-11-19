@@ -370,6 +370,8 @@ struct App {
     saved_queue: SavedQueue,
     playlist_edit: playlist_edit::State,
     collections: collections::State,
+    /// The newest music link being opened; an older one's answer is dropped.
+    link_request: u64,
     /// The lyrics options, karaoke greeting and share card.
     lyrics_extras: lyrics::State,
 }
@@ -445,7 +447,7 @@ pub enum Message {
     SearchSubmit,
     /// A music link from the search box or the command line.
     OpenLink(String),
-    LinkOpened(Result<services::LinkTarget, String>),
+    LinkOpened(u64, Result<services::LinkTarget, String>),
     SearchLoaded(String, Result<Vec<SearchSection>, String>),
     /// Reload the page on screen after a failure.
     Retry,
@@ -633,6 +635,7 @@ impl App {
                 .unwrap_or_default(),
             playlist_edit: playlist_edit::State::default(),
             collections: collections::State::default(),
+            link_request: 0,
             lyrics_extras: lyrics::State::new(&services),
             settings,
         };
@@ -1192,20 +1195,27 @@ impl App {
                 Task::none()
             }
             Message::PlayQueue(songs, index) => self.play(songs, index),
-            Message::OpenLink(link) => Task::batch([
-                self.notify("Opening link…"),
-                Task::perform(self.services.clone().open_link(link), Message::LinkOpened),
-            ]),
-            Message::LinkOpened(Ok(services::LinkTarget::Route(route))) => {
+            Message::OpenLink(link) => {
+                self.link_request += 1;
+                let request = self.link_request;
+                Task::batch([
+                    self.notify("Opening link…"),
+                    Task::perform(self.services.clone().open_link(link), move |result| {
+                        Message::LinkOpened(request, result)
+                    }),
+                ])
+            }
+            Message::LinkOpened(request, _) if request != self.link_request => Task::none(),
+            Message::LinkOpened(_, Ok(services::LinkTarget::Route(route))) => {
                 self.queue_open = false;
                 self.now_playing = false;
                 self.update(Message::Navigate(route))
             }
-            Message::LinkOpened(Ok(services::LinkTarget::Play(songs, index))) => {
+            Message::LinkOpened(_, Ok(services::LinkTarget::Play(songs, index))) => {
                 self.now_playing = true;
                 self.play(songs, index)
             }
-            Message::LinkOpened(Err(problem)) => self.notify(&problem),
+            Message::LinkOpened(_, Err(problem)) => self.notify(&problem),
             Message::Resolved(request, result) => {
                 if request != self.player.request {
                     return Task::none();
@@ -3460,6 +3470,7 @@ mod tests {
             comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
             collections: collections::State::default(),
+            link_request: 0,
         }
     }
 
@@ -3515,6 +3526,30 @@ mod tests {
         )));
         assert!(app.playlist_edit.busy("A"));
         assert!(!app.playlist_edit.busy("B"));
+    }
+
+    #[test]
+    fn an_older_link_answer_does_not_replace_the_newest_link() {
+        // notify() sleeps on a tokio timer, so the update needs a runtime.
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _guard = runtime.enter();
+        let mut app = app();
+        let _ = app.update(Message::OpenLink("https://youtu.be/AAAAAAAAAAA".into()));
+        let first = app.link_request;
+        let _ = app.update(Message::OpenLink("https://youtu.be/BBBBBBBBBBB".into()));
+        let songs = |id: &str| services::LinkTarget::Play(Arc::new(vec![song(id)]), 0);
+        // The first link's answer arrives after the second was submitted.
+        let _ = app.update(Message::LinkOpened(first, Ok(songs("A"))));
+        assert!(!app.now_playing && app.player.song().is_none());
+        let _ = app.update(Message::LinkOpened(app.link_request, Ok(songs("B"))));
+        assert_eq!(
+            app.player.song().map(|s| s.video_id.clone()).as_deref(),
+            Some("B")
+        );
+        // A late failure of the first link shows nothing either.
+        app.notice = None;
+        let _ = app.update(Message::LinkOpened(first, Err("old".into())));
+        assert!(app.notice.is_none());
     }
 
     #[test]
