@@ -236,19 +236,37 @@ impl SettingsStore {
             .map(|path| path.with_file_name("settings_defaults.json"))
     }
 
-    /// A missing or unreadable file reads as the defaults.
+    /// A missing or unreadable file reads as the defaults. A key whose value
+    /// this version cannot read (wrong type, a newer app's enum case) reads as
+    /// its default; the other keys stay.
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path)
+        let Some(serde_json::Value::Object(mut map)) = std::fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        else {
+            return Self::default();
+        };
+        let keys: Vec<String> = map.keys().cloned().collect();
+        for key in keys {
+            let one = serde_json::Map::from_iter([(key.clone(), map[&key].clone())]);
+            if serde_json::from_value::<Self>(one.into()).is_err() {
+                map.remove(&key);
+            }
+        }
+        serde_json::from_value(map.into()).unwrap_or_default()
     }
 
+    /// Writes a temporary file and renames it over `path`, so a crash or a
+    /// second save never leaves half a file. Saves are serialised.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SAVING.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, serde_json::to_vec(self)?)
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(self)?)?;
+        std::fs::rename(&tmp, path)
     }
 
     /// The lyrics providers to ask, in order: the saved order with providers it
@@ -354,6 +372,52 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains(r#""settings.audioQuality":"low""#));
         assert_eq!(SettingsStore::load(&path), settings);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn one_unreadable_key_keeps_the_others() {
+        let dir = std::env::temp_dir().join(format!("woof-settings-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings_defaults.json");
+        std::fs::write(
+            &path,
+            r#"{"settings.lyricsAlignment":"justify","settings.hideExplicit":true,"settings.defaultTab":"x","settings.lyricsOffsetSeconds":null}"#,
+        )
+        .unwrap();
+        let loaded = SettingsStore::load(&path);
+        assert!(loaded.hide_explicit);
+        assert_eq!(loaded.lyrics_alignment, LyricsAlignment::Center);
+        assert_eq!(loaded.default_tab, 0);
+        std::fs::write(&path, "[1,2").unwrap();
+        assert_eq!(SettingsStore::load(&path), SettingsStore::default());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parallel_saves_leave_one_whole_file() {
+        let dir = std::env::temp_dir().join(format!("woof-settings-par-{}", std::process::id()));
+        let path = dir.join("settings_defaults.json");
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let settings = SettingsStore {
+                        accent_name: i.to_string().repeat(4000),
+                        ..SettingsStore::default()
+                    };
+                    for _ in 0..20 {
+                        settings.save(&path).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let loaded: SettingsStore = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(loaded.accent_name.len() >= 4000);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

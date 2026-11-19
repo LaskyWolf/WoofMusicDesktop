@@ -4,6 +4,7 @@
 //! Odesli) and Diagnostics (`DiagnosticsView`); plus the player bar's "Copy song link".
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use iced::font::Weight;
 use iced::widget::{
@@ -133,6 +134,22 @@ impl std::fmt::Display for Country {
     }
 }
 
+/// The newest save asked for. Saves run on a thread pool and may finish out of
+/// order; one that is no longer the newest is skipped, so the last change wins.
+static LATEST_SAVE: AtomicU64 = AtomicU64::new(0);
+
+fn save_latest(
+    prefs: &SettingsStore,
+    path: &std::path::Path,
+    ticket: u64,
+    latest: &AtomicU64,
+) -> std::io::Result<()> {
+    if latest.load(Ordering::SeqCst) != ticket {
+        return Ok(());
+    }
+    prefs.save(path)
+}
+
 /// The settings file, `None` when there is no data folder.
 fn prefs_path() -> Option<std::path::PathBuf> {
     SettingsStore::default_path()
@@ -189,9 +206,10 @@ impl State {
             || prefs.content_country != self.prefs.content_country;
         self.prefs = prefs.clone();
         services.apply_settings(&prefs);
+        let ticket = LATEST_SAVE.fetch_add(1, Ordering::SeqCst) + 1;
         let save = match prefs_path() {
             Some(path) => Task::future(tokio::task::spawn_blocking(move || {
-                if let Err(error) = prefs.save(&path) {
+                if let Err(error) = save_latest(&prefs, &path, ticket, &LATEST_SAVE) {
                     eprintln!("Settings were not saved: {error}");
                 }
             }))
@@ -1357,6 +1375,30 @@ fn diagnostics(
             ],
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_slow_older_save_does_not_overwrite_a_newer_one() {
+        let dir = std::env::temp_dir().join(format!("woof-settings-order-{}", std::process::id()));
+        let path = dir.join("settings_defaults.json");
+        let latest = AtomicU64::new(2);
+        let old = SettingsStore {
+            accent_name: "old".into(),
+            ..SettingsStore::default()
+        };
+        let new = SettingsStore {
+            accent_name: "new".into(),
+            ..SettingsStore::default()
+        };
+        save_latest(&new, &path, 2, &latest).unwrap();
+        save_latest(&old, &path, 1, &latest).unwrap();
+        assert_eq!(SettingsStore::load(&path).accent_name, "new");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 const UP: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
