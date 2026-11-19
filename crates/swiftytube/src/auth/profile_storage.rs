@@ -6,7 +6,7 @@
 // active profile is read once per run: switching profiles restarts the app.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
@@ -62,17 +62,44 @@ impl Registry {
     /// Empty when the file is missing or unreadable.
     pub fn load() -> Self {
         registry_path()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .map(|path| Self::load_from(&path))
             .unwrap_or_default()
+    }
+
+    /// A file that doesn't parse is moved to `profiles.json.bak` before the
+    /// empty registry replaces it on the next save: the account-to-folder
+    /// map in it is the only thing that finds each account's library again.
+    fn load_from(path: &Path) -> Self {
+        let Ok(bytes) = std::fs::read(path) else {
+            return Self::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            log::error!("profiles.json is unreadable, kept as profiles.json.bak: {error}");
+            let _ = std::fs::rename(path, path.with_extension("json.bak"));
+            Self::default()
+        })
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         let path = registry_path().ok_or_else(|| std::io::Error::other("no data folder"))?;
+        self.save_to(&path)
+    }
+
+    /// Written to a file of its own and renamed over `path`, so a crash or a
+    /// second process never leaves half a file.
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, serde_json::to_vec_pretty(self)?)
+        let temp = path.with_extension(format!(
+            "json.{}.{:?}.tmp",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(&temp, path).inspect_err(|_| {
+            let _ = std::fs::remove_file(&temp);
+        })
     }
 
     /// The account's storage, claimed for it if new.
@@ -124,16 +151,67 @@ pub fn active() -> &'static str {
 /// The active profile's folder: the app's folder for the original profile,
 /// `Profiles/<id>` inside it for the others.
 pub fn dir() -> Option<PathBuf> {
-    let base = base_dir()?;
-    Some(match active() {
-        ORIGINAL => base,
-        storage => base.join("Profiles").join(storage),
-    })
+    Some(storage_dir(&base_dir()?, active()))
+}
+
+/// `storage` comes from a file anyone can edit: only a plain folder name may
+/// go below `Profiles`. `..`, `/x` and `a/b` fall back to the original folder.
+fn storage_dir(base: &Path, storage: &str) -> PathBuf {
+    let mut parts = Path::new(storage).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(name)), None) => base.join("Profiles").join(name),
+        _ => base.to_path_buf(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("woof-profiles-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn storage_names_cannot_leave_the_profiles_folder() {
+        let base = Path::new("/data/WoofMusic");
+        assert_eq!(storage_dir(base, ""), base);
+        assert_eq!(storage_dir(base, "abc-1"), base.join("Profiles/abc-1"));
+        for bad in ["..", "../x", "/etc", "a/b", "../../.ssh", "."] {
+            assert_eq!(storage_dir(base, bad), base, "{bad}");
+        }
+    }
+
+    #[test]
+    fn unreadable_registry_is_kept_aside_and_loads_empty() {
+        let dir = scratch("corrupt");
+        let path = dir.join("profiles.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert_eq!(Registry::load_from(&path), Registry::default());
+        assert_eq!(
+            std::fs::read(dir.join("profiles.json.bak")).unwrap(),
+            b"{ not json"
+        );
+        assert_eq!(
+            Registry::load_from(&dir.join("missing.json")),
+            Registry::default()
+        );
+    }
+
+    #[test]
+    fn save_replaces_the_file_whole_and_leaves_no_temp_files() {
+        let dir = scratch("save");
+        let path = dir.join("profiles.json");
+        let mut registry = Registry::default();
+        registry.claim("müller 日本 ✓");
+        registry.save_to(&path).unwrap();
+        assert_eq!(Registry::load_from(&path), registry);
+        let files = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(files, 1);
+    }
 
     #[test]
     fn first_account_takes_the_original_data_then_others_get_new_folders() {
