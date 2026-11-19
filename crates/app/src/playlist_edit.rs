@@ -76,6 +76,27 @@ impl State {
         }
     }
 
+    #[cfg(test)]
+    pub fn open_rename(&mut self, id: &str) {
+        self.page_mut(id).rename = Some(String::new());
+    }
+
+    #[cfg(test)]
+    pub fn rename_open(&self, id: &str) -> bool {
+        self.page(id).rename.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn busy(&self, id: &str) -> bool {
+        self.page(id).busy
+    }
+
+    /// The open page of playlist `id`, for an answer that arrives later: `None`
+    /// when another playlist is open now, so the answer does not reset it.
+    fn reply_page(&mut self, id: &str) -> Option<&mut Page> {
+        (self.page.id == id).then_some(&mut self.page)
+    }
+
     fn page_mut(&mut self, id: &str) -> &mut Page {
         if self.page.id != id {
             self.page = Page {
@@ -107,7 +128,8 @@ pub enum Msg {
     LibrarySongs(Vec<SongItem>),
     Add(String),
     PickCover,
-    CoverPicked(Option<Vec<u8>>),
+    /// The file dialog closed: the playlist it was opened for, and the image.
+    CoverPicked(String, Option<Vec<u8>>),
     People,
     PeopleLoaded(String, Vec<PlaylistCollaborator>),
     /// A change reached YouTube Music, or failed: the page reloads.
@@ -188,9 +210,41 @@ impl App {
                 page.confirm_delete = false;
                 page.error = None;
             }
-            Msg::Deleted(id, result) => {
+            Msg::CoverPicked(_, None) => {}
+            // For the playlist the dialog was opened on, not the one on screen now.
+            Msg::CoverPicked(id, Some(bytes)) => {
                 let page = edit.page_mut(&id);
-                page.busy = false;
+                if page.busy {
+                    return Task::none();
+                }
+                page.busy = true;
+                page.error = None;
+                return Task::perform(
+                    async move {
+                        let jpeg = tokio::task::spawn_blocking(move || square_jpeg(&bytes))
+                            .await
+                            .ok()
+                            .flatten();
+                        let result = match jpeg {
+                            Some(jpeg) => {
+                                PlaylistCoverUploader::set_cover(&services.sync, jpeg, &id)
+                                    .await
+                                    .map(drop)
+                                    .map_err(|error| error.to_string())
+                            }
+                            None => Err("This image can't be used. Try a different one.".into()),
+                        };
+                        (id, result)
+                    },
+                    |(id, result)| msg(Msg::Done(id, result)),
+                );
+            }
+            Msg::Deleted(id, result) => {
+                // A reply for a playlist that is no longer open leaves the open one alone.
+                let page = edit.reply_page(&id);
+                if let Some(page) = page {
+                    page.busy = false;
+                }
                 match result {
                     Ok(()) => {
                         self.details.remove(&format!("playlist:{id}"));
@@ -198,21 +252,25 @@ impl App {
                             return Task::done(Message::Back);
                         }
                     }
-                    Err(error) => page.error = Some(error),
+                    Err(error) => {
+                        if let Some(page) = edit.reply_page(&id) {
+                            page.error = Some(error);
+                        }
+                    }
                 }
             }
             Msg::PeopleLoaded(id, people) => {
-                let page = edit.page_mut(&id);
-                page.people_loaded = true;
                 let urls: Vec<_> = people.iter().filter_map(|p| p.avatar_url.clone()).collect();
-                if page.people.is_some() {
-                    page.people = Some(people);
+                if let Some(page) = edit.reply_page(&id) {
+                    page.people_loaded = true;
+                    if page.people.is_some() {
+                        page.people = Some(people);
+                    }
                 }
                 return self.fetch_covers(urls);
             }
             Msg::Done(id, result) => {
-                let page = edit.page_mut(&id);
-                if let Err(error) = result {
+                if let (Err(error), Some(page)) = (result, edit.reply_page(&id)) {
                     page.error = Some(error);
                 }
                 // Reloaded even after a failure: part of a change may have landed.
@@ -222,7 +280,9 @@ impl App {
                 });
             }
             Msg::Reloaded(id, result) => {
-                edit.page_mut(&id).busy = false;
+                if let Some(page) = edit.reply_page(&id) {
+                    page.busy = false;
+                }
                 return self.update(Message::DetailLoaded(format!("playlist:{id}"), result));
             }
             Msg::LibrarySongs(songs) => {
@@ -374,26 +434,9 @@ impl App {
                 if page.busy {
                     return Task::none();
                 }
-                return Task::perform(pick_image(), |bytes| msg(Msg::CoverPicked(bytes)));
-            }
-            Msg::CoverPicked(None) => {}
-            Msg::CoverPicked(Some(bytes)) => {
-                page.busy = true;
-                page.error = None;
-                return Task::perform(
-                    async move {
-                        let jpeg = tokio::task::spawn_blocking(move || square_jpeg(&bytes))
-                            .await
-                            .ok()
-                            .flatten()
-                            .ok_or("This image can't be used. Try a different one.")?;
-                        PlaylistCoverUploader::set_cover(&services.sync, jpeg, &id)
-                            .await
-                            .map(drop)
-                            .map_err(|error| error.to_string())
-                    },
-                    done,
-                );
+                return Task::perform(pick_image(), move |bytes| {
+                    msg(Msg::CoverPicked(id.clone(), bytes))
+                });
             }
             Msg::People => {
                 if page.people.take().is_some() {

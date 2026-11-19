@@ -3250,6 +3250,33 @@ mod tests {
     }
 
     #[test]
+    fn late_playlist_edit_reply_keeps_the_open_playlist_page() {
+        use playlist_edit::Msg;
+        let mut app = app();
+        app.playlist_edit.open_rename("B");
+        // The change on playlist A finishes after the user opened B.
+        let _ = app.update(Message::PlaylistEdit(Msg::Done("A".into(), Ok(()))));
+        let _ = app.update(Message::PlaylistEdit(Msg::Deleted("A".into(), Ok(()))));
+        assert!(app.playlist_edit.rename_open("B"));
+    }
+
+    #[test]
+    fn cover_goes_to_the_playlist_the_dialog_was_opened_for() {
+        use playlist_edit::Msg;
+        let mut app = app();
+        app.stack.push(Entry {
+            route: Route::Playlist("B".into()),
+            offset: 0.0,
+        });
+        let _ = app.update(Message::PlaylistEdit(Msg::CoverPicked(
+            "A".into(),
+            Some(vec![1, 2, 3]),
+        )));
+        assert!(app.playlist_edit.busy("A"));
+        assert!(!app.playlist_edit.busy("B"));
+    }
+
+    #[test]
     fn held_space_toggles_play_once() {
         assert!(shortcut(key(keyboard::key::Named::Space, false)).is_some());
         assert!(shortcut(key(keyboard::key::Named::Space, true)).is_none());
