@@ -306,6 +306,37 @@ fn untimed_line_in_saved_lrc_keeps_its_place() {
     );
 }
 
+fn edit_round_trip(raw: &str) -> Vec<LyricLine> {
+    let first = LyricsParsing::parse_stored_text(raw);
+    let text = LyricsParsing::serialize_lines(&first);
+    let second = LyricsParsing::parse_stored_text(&text);
+    assert_eq!(
+        texts(&first),
+        texts(&second),
+        "text changed by the editor round trip of {raw:?}"
+    );
+    let times = |l: &[LyricLine]| l.iter().map(|x| x.start_time).collect::<Vec<_>>();
+    assert_eq!(times(&first), times(&second), "{raw:?}");
+    let words = |l: &[LyricLine]| l.iter().map(|x| x.words.clone()).collect::<Vec<_>>();
+    assert_eq!(words(&first), words(&second), "{raw:?} -> {text:?}");
+    second
+}
+
+#[test]
+fn editor_round_trip_keeps_parsing_fixes_and_odd_word_timing() {
+    // BOM, compressed lines, offset header, untimed line.
+    let lines = edit_round_trip(
+        "\u{FEFF}[offset:+500]\n[00:10.00][01:20.00]Chorus\nadded\n[00:20.00]<00:20.00>Verse <00:20.00>zero<00:19.00>",
+    );
+    assert_eq!(lines.len(), 4);
+    // Zero length, overlapping and backwards words, romanized text.
+    edit_round_trip("[00:01.00]<00:01.00>a<00:01.00><00:01.00>b<00:03.00> <00:02.00>c<00:01.50>");
+    edit_round_trip("[00:01.00]<00:01.00>안녕<00:01.20> <00:01.20>an<00:01.40>nyeong<00:02.00>");
+    edit_round_trip("[00:01.00]<00:01.00>x<00:01.00>\n[00:01.00]<00:01.00>y");
+    edit_round_trip("[00:05.00]\n[00:06.00]word\n[00:07.00]");
+    edit_round_trip("[00:01.00]a <3 b\n[00:02.00]<tag> not a time");
+}
+
 // Providers, over a mock session.
 
 #[tokio::test]

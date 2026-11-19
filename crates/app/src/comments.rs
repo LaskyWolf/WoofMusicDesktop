@@ -148,6 +148,8 @@ impl Comments {
         self.items.clear();
         self.replies.clear();
         self.next_token = None;
+        // The next-page answer of the old order is dropped and never clears this.
+        self.loading_more = false;
         self.load += 1;
         let load = self.load;
         let service = service.clone();
@@ -225,7 +227,7 @@ impl Comments {
                     .find(|item| item.id == id)
                     .and_then(|item| item.reply_continuation.clone());
                 match token {
-                    Some(token) if state.is_open && state.items.is_empty() => {
+                    Some(token) if state.is_open && state.items.is_empty() && !state.is_loading => {
                         self.load_replies(service, id, token)
                     }
                     _ => Task::none(),
@@ -243,7 +245,12 @@ impl Comments {
                 state.is_loading = false;
                 match result {
                     Ok(page) => {
-                        state.items.extend(page.items);
+                        let new: Vec<CommentItem> = page
+                            .items
+                            .into_iter()
+                            .filter(|item| !state.items.iter().any(|old| old.id == item.id))
+                            .collect();
+                        state.items.extend(new);
                         state.next = page.next_page_token;
                     }
                     Err(error) => self.alert = Some(error.to_string()),
@@ -797,6 +804,60 @@ pub(crate) fn open_link(url: &str) {
     let result = std::process::Command::new("xdg-open").arg(url).spawn();
     if let Err(error) = result {
         log::warn!("Could not open {url}: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn service() -> Arc<CommentsService> {
+        crate::services::Services::for_test().comments.clone()
+    }
+
+    fn comment(id: &str, replies: Option<&str>) -> CommentItem {
+        CommentItem {
+            id: id.into(),
+            reply_continuation: replies.map(Into::into),
+            ..CommentItem::default()
+        }
+    }
+
+    #[test]
+    fn switching_the_order_during_a_next_page_load_keeps_paging() {
+        let service = service();
+        let mut comments = Comments {
+            sort_tokens: HashMap::from([(CommentSort::Newest, "newest".into())]),
+            loading_more: true,
+            ..Comments::default()
+        };
+        let stale = comments.load;
+        let _ = comments.update(Msg::Sort(CommentSort::Newest), &service);
+        let _ = comments.update(
+            Msg::MoreLoaded(stale, "old".into(), Ok(CommentsPage::default())),
+            &service,
+        );
+        assert!(!comments.loading_more);
+    }
+
+    #[test]
+    fn reopening_replies_while_they_load_does_not_ask_twice() {
+        let service = service();
+        let mut comments = Comments {
+            items: vec![comment("a", Some("tok"))],
+            ..Comments::default()
+        };
+        let _ = comments.update(Msg::ToggleReplies("a".into()), &service);
+        let _ = comments.update(Msg::ToggleReplies("a".into()), &service);
+        let _ = comments.update(Msg::ToggleReplies("a".into()), &service);
+        let load = comments.load;
+        let page = || CommentRepliesPage {
+            items: vec![comment("r1", None)],
+            next_page_token: None,
+        };
+        let _ = comments.update(Msg::RepliesLoaded(load, "a".into(), Ok(page())), &service);
+        let _ = comments.update(Msg::RepliesLoaded(load, "a".into(), Ok(page())), &service);
+        assert_eq!(comments.replies["a"].items.len(), 1);
     }
 }
 
