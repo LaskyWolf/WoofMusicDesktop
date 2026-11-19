@@ -1095,9 +1095,10 @@ fn artist<'a>(stats: &'a RecapStats, covers: &'a ui::Covers) -> Element<'a, Mess
             .font(theme::weight(Weight::ExtraBold))
             .align_x(Alignment::Center),
         sub(format!(
-            "{} min · {} plays",
+            "{} min · {} {}",
             grouped(top.minutes),
-            grouped(top.plays)
+            grouped(top.plays),
+            if top.plays == 1 { "play" } else { "plays" }
         )),
         Space::new().height(10),
         rest,
@@ -1207,6 +1208,9 @@ fn unlocked_card(badge: &RecapBadge) -> Element<'_, Message> {
     .into()
 }
 
+/// Badge tiles the recap slide shows before "+N more".
+const MAX_BADGE_TILES: usize = 6;
+
 fn badges_slide<'a>(stats: &'a RecapStats, month: &str) -> Element<'a, Message> {
     let count = stats.new_badges.len();
     let title = if count == 1 {
@@ -1214,8 +1218,13 @@ fn badges_slide<'a>(stats: &'a RecapStats, month: &str) -> Element<'a, Message> 
     } else {
         format!("{count} badges unlocked in {month}")
     };
-    let tiles = stats.new_badges.iter().map(|badge| badge_tile(badge, true));
-    column![
+    // Two rows fit the smallest window; the rest would run off the card.
+    let tiles = stats
+        .new_badges
+        .iter()
+        .take(MAX_BADGE_TILES)
+        .map(|badge| badge_tile(badge, true));
+    let mut slide = column![
         kicker("New on your shelf".into()),
         headline(title, 26.0),
         text(format!(
@@ -1231,8 +1240,11 @@ fn badges_slide<'a>(stats: &'a RecapStats, month: &str) -> Element<'a, Message> 
             .wrap()
             .vertical_spacing(14),
     ]
-    .spacing(8)
-    .into()
+    .spacing(8);
+    if count > MAX_BADGE_TILES {
+        slide = slide.push(sub(format!("+{} more", count - MAX_BADGE_TILES)));
+    }
+    slide.into()
 }
 
 fn summary(stats: &RecapStats) -> Element<'_, Message> {
