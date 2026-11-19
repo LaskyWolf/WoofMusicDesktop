@@ -95,10 +95,7 @@ impl LastFMSettings {
 
     /// A missing or unreadable file reads as the defaults, like unset keys.
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        crate::settings::settings_store::load_keeping_valid_keys(path)
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {

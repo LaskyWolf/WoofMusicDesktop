@@ -87,6 +87,25 @@ pub const AUDIO_QUALITIES: [(AudioQuality, &str); 4] = [
     (AudioQuality::Low, "Low"),
 ];
 
+/// Reads a JSON settings object. A key this version cannot read (wrong type, a
+/// newer app's enum case) reads as its default; the other keys stay.
+pub fn load_keeping_valid_keys<T: Default + serde::de::DeserializeOwned>(path: &Path) -> T {
+    let Some(serde_json::Value::Object(mut map)) = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    else {
+        return T::default();
+    };
+    let keys: Vec<String> = map.keys().cloned().collect();
+    for key in keys {
+        let one = serde_json::Map::from_iter([(key.clone(), map[&key].clone())]);
+        if serde_json::from_value::<T>(one.into()).is_err() {
+            map.remove(&key);
+        }
+    }
+    serde_json::from_value(map.into()).unwrap_or_default()
+}
+
 /// Swift `QuickPicksSize`: columns x rows of square cards on Home.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuickPicksSize {
@@ -314,20 +333,7 @@ impl SettingsStore {
     /// this version cannot read (wrong type, a newer app's enum case) reads as
     /// its default; the other keys stay.
     pub fn load(path: &Path) -> Self {
-        let Some(serde_json::Value::Object(mut map)) = std::fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        else {
-            return Self::default();
-        };
-        let keys: Vec<String> = map.keys().cloned().collect();
-        for key in keys {
-            let one = serde_json::Map::from_iter([(key.clone(), map[&key].clone())]);
-            if serde_json::from_value::<Self>(one.into()).is_err() {
-                map.remove(&key);
-            }
-        }
-        serde_json::from_value(map.into()).unwrap_or_default()
+        load_keeping_valid_keys(path)
     }
 
     /// Writes a temporary file and renames it over `path`, so a crash or a
@@ -542,5 +548,31 @@ mod tests {
         assert_eq!(settings.offset_description(), "+1.5s");
         settings.lyrics_offset_seconds = -0.25;
         assert_eq!(settings.offset_description(), "-0.25s");
+    }
+
+    #[test]
+    fn one_unreadable_key_in_a_last_fm_or_discord_file_keeps_the_others() {
+        use crate::discord::discord_defaults::DiscordSettings;
+        use crate::last_fm::last_fm_defaults::LastFMSettings;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-trop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let last_fm = dir.join("last_fm.json");
+        std::fs::write(
+            &last_fm,
+            r#"{"lastfmUsername":"wolf","lastfmScrobblingEnable":true,"scrobbleDelayPercent":"half"}"#,
+        )
+        .unwrap();
+        let loaded = LastFMSettings::load(&last_fm);
+        assert_eq!(loaded.username.as_deref(), Some("wolf"));
+        assert!(loaded.scrobbling_enabled);
+        assert_eq!(loaded.scrobble_delay_percent, 0.5);
+        let discord = dir.join("discord.json");
+        std::fs::write(
+            &discord,
+            r#"{"discordRPCEnable":false,"discordAdvancedMode":3}"#,
+        )
+        .unwrap();
+        let loaded = DiscordSettings::load(&discord);
+        assert!(!loaded.enabled && !loaded.advanced_mode);
     }
 }
