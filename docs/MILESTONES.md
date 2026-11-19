@@ -95,7 +95,7 @@ Done when: every WoofMusic iOS feature above works on desktop.
 
 ## R7: Window background
 
-- [ ] Blur behind the window: `ext-background-effect-v1` / KWin blur on Wayland, Mica on Windows 11
+- [x] Blur behind the window: `ext-background-effect-v1` on Wayland (KWin 6.8 no longer lists its own blur), Mica on Windows 11 (not yet run on Windows), black elsewhere
 - [ ] Opaque fallback elsewhere
 
 ## R8: Packages

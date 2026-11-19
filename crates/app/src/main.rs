@@ -1,5 +1,6 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
+mod backdrop;
 mod comments;
 mod downloads;
 mod equalizer;
@@ -85,13 +86,14 @@ pub fn main() -> iced::Result {
         .font(include_bytes!("../assets/InterVariable.ttf").as_slice())
         .default_font(theme::FONT)
         .style(|_, _| iced::theme::Style {
-            background_color: theme::BACKGROUND,
+            background_color: backdrop::color(),
             text_color: theme::TEXT,
         })
         .window(window::Settings {
             size: dev_size().unwrap_or(WINDOW_SIZE),
             min_size: Some(Size::new(880.0, 560.0)),
             decorations: false,
+            transparent: backdrop::transparent(),
             #[cfg(target_os = "linux")]
             platform_specific: window::settings::PlatformSpecific {
                 application_id: APP_ID.into(),
@@ -643,6 +645,7 @@ impl App {
                 saved,
                 settings::load(),
                 profile::dev_open(),
+                backdrop::apply(),
             ]),
         )
     }

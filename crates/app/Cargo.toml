@@ -25,3 +25,12 @@ discord-rich-presence = "1.1.0"
 dirs = "7"
 jiff = "0.2.46"
 qrcode = { version = "0.14", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+[target."cfg(windows)".dependencies]
+window-vibrancy = "0.8.1"
