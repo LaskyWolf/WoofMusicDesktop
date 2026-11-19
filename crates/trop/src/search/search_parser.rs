@@ -7,7 +7,7 @@ use swiftytube::networking::inner_tube_json::InnerTubeJSON;
 
 use crate::networking::models::home_page::next_id;
 use crate::networking::models::yt_item::{
-    AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTItem,
+    AlbumItem, ArtistItem, PlaylistItem, PodcastItem, SongItem, YTArtist, YTItem,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,7 +88,21 @@ impl SearchParser {
                     .unwrap_or("Top result");
                 let mut items: Vec<YTItem> = Vec::new();
                 items.extend(Self::parse_top_result(card_shelf));
-                for item in responsive_items(card_shelf.get("contents")) {
+                // The songs under an artist card leave their own artist out
+                // ("Song • 1:36"): they are that artist's.
+                let owner = match items.first() {
+                    Some(YTItem::Artist(artist)) => Some(YTArtist {
+                        name: artist.name.clone(),
+                        id: Some(artist.browse_id.clone()),
+                    }),
+                    _ => None,
+                };
+                for mut item in responsive_items(card_shelf.get("contents")) {
+                    if let (YTItem::Song(song), Some(owner)) = (&mut item, &owner)
+                        && song.artists.is_empty()
+                    {
+                        song.artists.push(owner.clone());
+                    }
                     if items.first().is_none_or(|first| first.id() != item.id()) {
                         items.push(item);
                     }

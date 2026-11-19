@@ -269,3 +269,32 @@ fn local_search_finds_library_songs_artists_and_playlists() {
             .is_empty()
     );
 }
+
+#[test]
+fn songs_under_the_artist_card_carry_that_artist() {
+    let sections = sections();
+    let top = &sections[0];
+    let songs: Vec<&SongItem> = top
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            YTItem::Song(song) => Some(song),
+            _ => None,
+        })
+        .collect();
+    assert!(!songs.is_empty());
+    for song in songs {
+        assert_eq!(
+            song.artists.first().map(|a| a.name.as_str()),
+            Some("Daft Punk"),
+            "{} has no artist",
+            song.title
+        );
+        assert!(
+            song.artists[0]
+                .id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("UC"))
+        );
+    }
+}
