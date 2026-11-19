@@ -1,19 +1,25 @@
 // Data half of Trop/Home/HomeViewModel.swift: the browse calls, chips,
-// continuations and section ordering. SwiftUI state (loading flags, error,
-// notification observers), the personalization sections (Quick Picks from
-// history, Keep Listening, Daily Discover...) and `SavedHome` (the last page
-// cached on disk) land with the library port (R5). Until then `local_sections`
-// and `phase2_sections` stay empty.
+// continuations, the sections built from the library and the account, their
+// order among YouTube's shelves, and `SavedHome` (the last page cached on
+// disk). SwiftUI state (loading flags, error, notification observers) lives
+// in the app.
 //
 // Methods take `&mut self`, so two loads never interleave: the Swift
 // generation guards and `isLoadingMore` are not needed. Every method
 // returns when the state below is updated; the UI reads `home_sections`.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use swiftytube::core::swiftytube_log::SwiftyTubeLog;
 use swiftytube::networking::inner_tube_client::{BrowseArgs, InnerTubeClient};
+use swiftytube::networking::inner_tube_decode::JsonDict;
 use swiftytube::networking::inner_tube_error::InnerTubeError;
+
+use super::mixes::{self, Mix};
+use crate::database::database_service::DatabaseService;
+use crate::services::personalization_service as personalization;
 
 use crate::networking::models::home_page::{HomePage, HomePageChip, HomePageSection, HomeSection};
 use crate::networking::models::home_page_parser::HomePageParser;
@@ -41,11 +47,17 @@ pub struct HomeViewModel {
     pub home_page: Option<HomePage>,
     pub selected_chip: Option<HomePageChip>,
 
-    /// Sections built from the local library (R5).
+    /// Quick Picks, Keep Listening and Forgotten Favorites from the library.
     pub local_sections: Vec<HomeSection>,
 
-    /// Account-only sections built after sign-in (R5).
+    /// Account-only sections: Daily Discover, community playlists, "Similar to".
     pub phase2_sections: Vec<HomeSection>,
+
+    /// The Your Mixes row under Keep Listening.
+    pub mixes: Vec<Mix>,
+
+    /// Where each fetched first page is saved, for the next launch.
+    pub saved_home: Option<PathBuf>,
 
     previous_home_page: Option<HomePage>,
 }
@@ -61,8 +73,51 @@ impl HomeViewModel {
             selected_chip: None,
             local_sections: Vec::new(),
             phase2_sections: Vec::new(),
+            mixes: Vec::new(),
+            saved_home: None,
             previous_home_page: None,
         }
+    }
+
+    /// Forgets the page and the mood chip, for a load from scratch.
+    pub fn reset(&mut self) {
+        self.home_page = None;
+        self.selected_chip = None;
+        self.previous_home_page = None;
+    }
+
+    /// Swift `storeLocalSections`: Quick Picks (`quick_picks_limit` songs),
+    /// Keep Listening and Forgotten Favorites, and the mixes.
+    pub fn load_local_sections(&mut self, db: &DatabaseService, quick_picks_limit: usize) {
+        let quick_picks = if self.show_quick_picks {
+            personalization::build_quick_picks(db, quick_picks_limit)
+        } else {
+            HomeSection::QuickPicks(Vec::new())
+        };
+        self.local_sections = [
+            quick_picks,
+            personalization::build_keep_listening(db),
+            personalization::build_forgotten_favorites(db),
+        ]
+        .into_iter()
+        .filter(|section| !section.items().is_empty())
+        .collect();
+        self.mixes = mixes::build(db, SystemTime::now());
+    }
+
+    /// Swift `showSavedHome`: the last page, while the new one loads. False
+    /// when a page is already shown or none was saved.
+    pub fn show_saved_home(&mut self) -> bool {
+        if self.home_page.is_some() {
+            return false;
+        }
+        let Some(mut saved) = self.saved_home.as_deref().and_then(SavedHome::page) else {
+            return false;
+        };
+        // The token may have expired. The next pages wait for the new answer.
+        saved.continuation = None;
+        self.home_page = Some(saved);
+        true
     }
 
     // MARK: - Home Data Loading
@@ -82,6 +137,9 @@ impl HomeViewModel {
             .browse(BrowseArgs::id("FEmusic_home"))
             .await?;
         let page = HomePageParser::parse_home_page(&json).ok_or(InnerTubeError::DecodingFailed)?;
+        if let Some(path) = &self.saved_home {
+            SavedHome::write(&json, path);
+        }
         // A mood chip's feed stays on screen. This page comes back when it closes.
         if self.selected_chip.is_none() {
             self.home_page = Some(page);
@@ -336,5 +394,40 @@ impl HomeViewModel {
             HomeSection::SimilarRecommendation(..) => 35,
             HomeSection::FromTheCommunity(_) => 25,
         }
+    }
+}
+
+/// The last Home page, shown at launch while the new one loads.
+pub struct SavedHome;
+
+impl SavedHome {
+    /// `home.json` next to the database.
+    // ponytail: one file; Swift keeps one per profile. Add the profile id
+    // once the desktop has profiles.
+    pub fn default_path() -> Option<PathBuf> {
+        Some(DatabaseService::default_path()?.with_file_name("home.json"))
+    }
+
+    pub fn clear(path: &Path) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Written to a temporary file first, so a crash never leaves half a page.
+    pub fn write(json: &JsonDict, path: &Path) {
+        let Ok(bytes) = serde_json::to_vec(json) else {
+            return;
+        };
+        let temporary = path.with_extension("json.tmp");
+        if let Err(error) =
+            std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path))
+        {
+            SwiftyTubeLog::notice(&format!("Saving the Home page failed: {error}"));
+        }
+    }
+
+    pub fn page(path: &Path) -> Option<HomePage> {
+        let bytes = std::fs::read(path).ok()?;
+        let json: JsonDict = serde_json::from_slice(&bytes).ok()?;
+        HomePageParser::parse_home_page(&json)
     }
 }
