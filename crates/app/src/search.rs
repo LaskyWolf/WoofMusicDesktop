@@ -98,11 +98,16 @@ fn wrap(msg: Msg) -> Message {
     Message::Search(msg)
 }
 
-/// Saves `prefs` with one change.
-fn change(prefs: &SettingsStore, edit: impl FnOnce(&mut SettingsStore)) -> Task<Message> {
-    let mut prefs = prefs.clone();
+/// Saves the settings with one change, at once: a change sent as a message
+/// could be overwritten by another sent from the same old settings.
+fn change(
+    settings: &mut settings::State,
+    services: &Arc<Services>,
+    edit: impl FnOnce(&mut SettingsStore),
+) -> Task<Message> {
+    let mut prefs = settings.prefs.clone();
     edit(&mut prefs);
-    Task::done(Message::Settings(settings::Message::Change(prefs)))
+    settings.change(prefs, services)
 }
 
 impl State {
@@ -110,8 +115,9 @@ impl State {
         &mut self,
         msg: Msg,
         services: &Arc<Services>,
-        prefs: &SettingsStore,
+        settings: &mut settings::State,
     ) -> Task<Message> {
+        let prefs = &settings.prefs;
         match msg {
             Msg::Input(query) => {
                 self.query = query;
@@ -150,9 +156,9 @@ impl State {
             }
             Msg::Pick(query) => {
                 self.query = query;
-                self.submit(services, prefs)
+                self.submit(services, settings)
             }
-            Msg::Submit => self.submit(services, prefs),
+            Msg::Submit => self.submit(services, settings),
             Msg::Loaded(query, result) => {
                 if query != self.submitted {
                     return Task::none();
@@ -197,7 +203,7 @@ impl State {
             Msg::Sort(sort) => {
                 self.sort(sort);
                 Task::batch([
-                    change(prefs, |p| p.search_sort = sort),
+                    change(settings, services, |p| p.search_sort = sort),
                     self.load_recency(services, sort),
                 ])
             }
@@ -206,11 +212,13 @@ impl State {
                 self.sort(prefs.search_sort);
                 Task::none()
             }
-            Msg::Delete(query) => change(prefs, |p| p.search_history.retain(|q| *q != query)),
-            Msg::Clear => change(prefs, |p| p.search_history.clear()),
+            Msg::Delete(query) => change(settings, services, |p| {
+                p.search_history.retain(|q| *q != query)
+            }),
+            Msg::Clear => change(settings, services, |p| p.search_history.clear()),
             Msg::Incognito => {
                 self.suggestions.clear();
-                change(prefs, |p| p.is_incognito = !p.is_incognito)
+                change(settings, services, |p| p.is_incognito = !p.is_incognito)
             }
         }
     }
@@ -225,7 +233,12 @@ impl State {
         };
     }
 
-    fn submit(&mut self, services: &Arc<Services>, prefs: &SettingsStore) -> Task<Message> {
+    fn submit(
+        &mut self,
+        services: &Arc<Services>,
+        settings: &mut settings::State,
+    ) -> Task<Message> {
+        let sort = settings.prefs.search_sort;
         let query = self.query.trim().to_owned();
         if query.is_empty() {
             return Task::none();
@@ -237,19 +250,17 @@ impl State {
         self.submitted = query.clone();
         self.results = Some(Load::Loading);
         self.filter = Filter::default();
-        let history = if prefs.track_search_history && !prefs.is_incognito {
-            change(prefs, |p| model::remember(&mut p.search_history, &query))
+        let history = if settings.prefs.track_search_history && !settings.prefs.is_incognito {
+            change(settings, services, |p| {
+                model::remember(&mut p.search_history, &query)
+            })
         } else {
             Task::none()
         };
         let search = Task::perform(services.clone().search(query.clone()), move |result| {
             wrap(Msg::Loaded(query.clone(), result))
         });
-        Task::batch([
-            search,
-            history,
-            self.load_recency(services, prefs.search_sort),
-        ])
+        Task::batch([search, history, self.load_recency(services, sort)])
     }
 
     /// Refetches play recency for Recently Played; the last map stays in use meanwhile.

@@ -224,7 +224,11 @@ impl State {
 
     /// Saves `prefs` off the UI thread and hands them to the services; Home
     /// reloads when what it shows changed.
-    fn change(&mut self, prefs: SettingsStore, services: &Arc<Services>) -> Task<crate::Message> {
+    pub(crate) fn change(
+        &mut self,
+        prefs: SettingsStore,
+        services: &Arc<Services>,
+    ) -> Task<crate::Message> {
         let home_changed = prefs.hide_explicit != self.prefs.hide_explicit
             || prefs.show_quick_picks != self.prefs.show_quick_picks
             || prefs.content_country != self.prefs.content_country;

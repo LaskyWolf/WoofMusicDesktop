@@ -1135,9 +1135,7 @@ impl App {
                 self.details.insert(key, loaded(result));
                 Task::batch([covers, album])
             }
-            Message::Search(msg) => self
-                .search
-                .update(msg, &self.services, &self.settings.prefs),
+            Message::Search(msg) => self.search.update(msg, &self.services, &mut self.settings),
             Message::Retry => {
                 match self.route().clone() {
                     Route::Home => self.home = Load::Loading,
