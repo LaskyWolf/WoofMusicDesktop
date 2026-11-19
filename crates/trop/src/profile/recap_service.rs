@@ -15,6 +15,9 @@ use crate::database::database_service::DatabaseService;
 use crate::history::history_view_model::{RemoteSection, shelf_date};
 use crate::networking::models::yt_item::SongItem;
 
+/// No single play lasts longer than a day.
+const MAX_PLAY_MS: i64 = 24 * 3_600_000;
+
 // Badge rules. Shares need `RATIO_MINIMUM_MINUTES` of listening first, so a
 // single late-night song can't make a Night Owl.
 pub const NIGHT_OWL_SHARE: f64 = 0.4;
@@ -413,7 +416,8 @@ fn play(
         time,
         day: zoned.date(),
         hour: zoned.hour(),
-        ms,
+        // A corrupt row must not make a negative total or overflow the sums.
+        ms: ms.clamp(0, MAX_PLAY_MS),
         artist,
         is_episode,
     }
@@ -928,5 +932,33 @@ mod tests {
         let new: Vec<BadgeKind> = stats.new_badges.iter().map(|b| b.kind).collect();
         assert!(new.contains(&BadgeKind::LunchBreak));
         assert!(!new.contains(&BadgeKind::FirstSteps));
+    }
+
+    #[test]
+    fn corrupt_play_times_cannot_make_negative_or_overflowing_totals() {
+        let db = DatabaseService::open_in_memory();
+        let plays = vec![
+            song_play("a", "2026-10-02T12:00:00Z", -500, "Pup"),
+            song_play("b", "2026-10-03T12:00:00Z", 5, "Wolf"),
+        ];
+        let huge = |id: &str| {
+            play(
+                id.into(),
+                at("2026-10-04T12:00:00Z"),
+                i64::MAX,
+                None,
+                false,
+                &TimeZone::UTC,
+            )
+        };
+        let plays: Vec<Play> = plays.into_iter().chain([huge("c"), huge("d")]).collect();
+        let tz = TimeZone::UTC;
+        let interval = month_containing(at("2026-10-15T00:00:00Z"), &tz);
+        let stats = db
+            .read(|db| stats(db, &plays, &[], interval, false, &tz))
+            .unwrap();
+        assert!(stats.total_minutes >= 5, "{}", stats.total_minutes);
+        assert!(stats.weekly_minutes.iter().all(|m| *m >= 0));
+        assert!(stats.top_artists.iter().all(|a| a.minutes >= 0));
     }
 }
