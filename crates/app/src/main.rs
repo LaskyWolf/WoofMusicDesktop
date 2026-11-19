@@ -435,6 +435,8 @@ pub enum Message {
     Maximized(bool),
     /// Push a page.
     Navigate(Route),
+    /// The artist a song menu looked up by name, and the page it was asked from.
+    ArtistFound(Route, String),
     /// A sidebar tab: start over from that page.
     Tab(Route),
     Back,
@@ -922,6 +924,11 @@ impl App {
                 self.stack.push(Entry { route, offset: 0.0 });
                 Task::batch([self.enter(), scroll_page_to(0.0)])
             }
+            // A slow lookup doesn't pull the user off a page they opened meanwhile.
+            Message::ArtistFound(from, id) if *self.route() == from => {
+                self.update(Message::Navigate(Route::Artist(id)))
+            }
+            Message::ArtistFound(..) => Task::none(),
             Message::Tab(route) => {
                 self.now_playing = false;
                 self.stack = vec![Entry { route, offset: 0.0 }];
@@ -1300,8 +1307,10 @@ impl App {
             }
             Message::ChangePicture => {
                 // The app cannot change it through an API: Studio does, signed in the browser.
-                let _ = integrations::open_in_browser("https://studio.youtube.com/");
-                Task::none()
+                match integrations::open_in_browser("https://studio.youtube.com/") {
+                    Ok(()) => Task::none(),
+                    Err(error) => self.notify(&format!("Couldn't open your browser: {error}")),
+                }
             }
             Message::SkipFrame(now) => {
                 self.skip.frame(now);
@@ -1890,8 +1899,9 @@ impl App {
             }
             Action::OpenArtist(artist) => {
                 let name = artist.name;
-                Task::perform(self.services.clone().artist_id_by_name(name), |id| {
-                    id.map_or(Message::Noop, |id| Message::Navigate(Route::Artist(id)))
+                let from = self.route().clone();
+                Task::perform(self.services.clone().artist_id_by_name(name), move |id| {
+                    id.map_or(Message::Noop, |id| Message::ArtistFound(from, id))
                 })
             }
             Action::ShowArtists => {
@@ -3652,6 +3662,17 @@ mod tests {
             let _ = app.update(Message::MenuAction(action));
         }
         assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn a_late_artist_lookup_stays_off_a_page_opened_meanwhile() {
+        let mut app = app();
+        let from = app.route().clone();
+        let _ = app.update(Message::Tab(Route::Explore));
+        let _ = app.update(Message::ArtistFound(from, "UCx".into()));
+        assert_eq!(*app.route(), Route::Explore);
+        let _ = app.update(Message::ArtistFound(Route::Explore, "UCx".into()));
+        assert_eq!(*app.route(), Route::Artist("UCx".into()));
     }
 
     #[test]

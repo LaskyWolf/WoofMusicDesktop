@@ -326,12 +326,15 @@ impl State {
                 Task::none()
             }
             Message::ShowLog => {
-                if let Some(folder) =
-                    crate::problems::log_path().and_then(|p| p.parent().map(ToOwned::to_owned))
+                let folder =
+                    crate::problems::log_path().and_then(|p| p.parent().map(ToOwned::to_owned));
+                match folder.map(|folder| integrations::open_in_browser(&folder.to_string_lossy()))
                 {
-                    let _ = integrations::open_in_browser(&folder.to_string_lossy());
+                    Some(Err(error)) => Task::done(crate::Message::Notify(format!(
+                        "Couldn't open the folder: {error}"
+                    ))),
+                    _ => Task::none(),
                 }
-                Task::none()
             }
             Message::Saved(Ok(mut status)) => {
                 // What was typed since the request went out stays.
