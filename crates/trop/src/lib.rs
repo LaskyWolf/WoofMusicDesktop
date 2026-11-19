@@ -10,6 +10,7 @@ pub mod history;
 pub mod home;
 pub mod last_fm;
 pub mod listen_brainz;
+pub mod listen_together;
 pub mod networking;
 pub mod odesli;
 pub mod playback;

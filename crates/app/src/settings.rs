@@ -675,6 +675,7 @@ impl State {
                 self.last_fm(status),
                 self.listen_brainz(status),
                 odesli(status),
+                listen_together(),
             ]),
         ];
         if let Some(error) = &self.error {
@@ -872,6 +873,17 @@ fn odesli<'a>(status: &Status) -> Element<'a, crate::Message> {
             "Adds Copy song link to the player bar. The song.link page lists the song on every service.",
         ),
         Some(switch(status.share_links, Action::SetShareLinks)),
+    )
+}
+
+fn listen_together<'a>() -> Element<'a, crate::Message> {
+    setting(
+        "Listen Together",
+        caption("Hear the same song at the same moment as friends, on WoofMusic or Metrolist."),
+        Some(ui::pill_button(
+            "Open",
+            crate::Message::Together(crate::together::Msg::Open),
+        )),
     )
 }
 

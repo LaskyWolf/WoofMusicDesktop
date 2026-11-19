@@ -87,7 +87,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Player settings: persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`, `NowPlaying`)
 - [x] Accent colour, library layout and gapless playback settings (`SettingsStore`)
 - [x] Profile and Recap (`Profile/`)
-- [ ] ListenTogether (`ListenTogether/`)
+- [x] ListenTogether (`ListenTogether/`); not yet tried against a live metroserver
 
 Not ported (iPhone only): CarPlay, widgets, App Intents and quick actions, haptics, swipe gestures, alternate app icons, in-app updater.
 

@@ -19,6 +19,7 @@ mod share_card;
 mod song_menu;
 mod theme;
 mod title_bar;
+mod together;
 mod transitions;
 mod ui;
 mod virtual_list;
@@ -321,6 +322,8 @@ struct App {
     profile: profile::Profile,
     /// The share card studio, over everything while open.
     studio: Option<share_card::Studio>,
+    /// Listen Together: the room and its panel.
+    together: together::Room,
     /// Crossfades and AutoMix between songs; `None` without libmpv.
     transitions: Option<Transitions>,
     session: Session,
@@ -508,6 +511,7 @@ pub enum Message {
     /// Opens the share card studio; `true` when it comes from the lyric picker.
     OpenStudio(share_card::Content, bool),
     Studio(share_card::Msg),
+    Together(together::Msg),
     /// Loads these covers into the cache.
     FetchCovers(Vec<String>),
 }
@@ -554,6 +558,7 @@ impl App {
             feeds: feeds::Feeds::default(),
             profile: profile::Profile::default(),
             studio: None,
+            together: together::Room::default(),
             // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
             comments: comments::Comments::default(),
             transitions: services
@@ -1081,7 +1086,7 @@ impl App {
                         if let Some(song) = self.player.queue.song() {
                             player.set_speed(self.speed.select(&song.video_id, is_episode(song)));
                         }
-                        player
+                        let error = player
                             .play(
                                 &url,
                                 video_id.as_deref(),
@@ -1089,7 +1094,15 @@ impl App {
                                 loudness,
                             )
                             .err()
-                            .map(|error| error.to_string())
+                            .map(|error| error.to_string());
+                        // A Listen Together guest waits for the room to say play.
+                        if video_id
+                            .as_deref()
+                            .is_some_and(|id| self.together.holds(id))
+                        {
+                            player.set_paused(true);
+                        }
+                        error
                     }
                 };
                 self.read_player();
@@ -1252,6 +1265,9 @@ impl App {
             Message::Dismiss => {
                 if self.studio.is_some() {
                     self.update(Message::Studio(share_card::Msg::Back))
+                } else if self.together.open {
+                    self.together.open = false;
+                    Task::none()
                 } else if self.profile.is_open() {
                     self.update(Message::Profile(profile::Msg::Close))
                 } else if self.lyrics_extras.close_sheet() {
@@ -1348,6 +1364,7 @@ impl App {
                 (message, Some(studio)) => studio.update(message),
                 (_, None) => Task::none(),
             },
+            Message::Together(message) => self.update_together(message),
             Message::FetchCovers(urls) => self.fetch_covers(urls),
             Message::Feeds(message) => {
                 let task = self.feeds.update(message, &self.services);
@@ -1652,6 +1669,14 @@ impl App {
                     .update(settings::Message::CopyLink(song.video_id), &self.services),
                 self.notify("Song link copied"),
             ]),
+            Action::Suggest => {
+                self.menu = None;
+                self.update(Message::Together(together::Msg::Suggest(Box::new(song))))
+            }
+            Action::ListenTogether => {
+                self.menu = None;
+                self.update(Message::Together(together::Msg::Open))
+            }
             Action::ShareCard => {
                 let content = share_card::Content {
                     lines: Vec::new(),
@@ -2001,6 +2026,10 @@ impl App {
     /// Drives crossfades and AutoMix; when the decks swapped, the queue moves
     /// on to the song now playing.
     fn tick_transitions(&mut self) -> Task<Message> {
+        // A Listen Together guest plays what the room plays: no mixes of its own.
+        if self.together.is_guest() {
+            return Task::none();
+        }
         let Some(transitions) = &mut self.transitions else {
             return Task::none();
         };
@@ -2080,6 +2109,93 @@ impl App {
         Task::batch(tasks.into_iter().map(|(_, task)| task))
     }
 
+    /// The signed-in account's name and picture.
+    fn account_info(&self) -> Option<(&str, Option<&str>)> {
+        match &self.session {
+            Session::SignedIn(Some(Ok(info))) => {
+                Some((info.name.as_str(), info.thumbnail_url.as_deref()))
+            }
+            _ => None,
+        }
+    }
+
+    fn update_together(&mut self, message: together::Msg) -> Task<Message> {
+        let mut prefs = self.settings.prefs.clone();
+        match message {
+            together::Msg::Name(name) => prefs.listen_together_username = name,
+            together::Msg::Server(url) => prefs.listen_together_server_url = url,
+            together::Msg::UseDefaultServer => {
+                prefs.listen_together_server_url =
+                    trop::listen_together::DEFAULT_SERVER_URL.to_owned();
+            }
+            message => {
+                let player = &self.player;
+                let queue = &player.queue;
+                let cx = together::Cx {
+                    services: self.services.clone(),
+                    server_url: prefs.listen_together_server_url,
+                    username: prefs.listen_together_username,
+                    account: self.account_info().map(|(name, _)| name.to_owned()),
+                    np: together::Playback {
+                        song: player.song().cloned(),
+                        playing: player.state == PlayState::Playing,
+                        position: player.position,
+                        duration: player.duration,
+                        loading: player.starting || player.duration <= 0.0,
+                        upcoming: queue
+                            .songs
+                            .iter()
+                            .skip(queue.index + 1)
+                            .take(100)
+                            .cloned()
+                            .collect(),
+                        mixing_into: self.transitions.as_ref().and_then(Transitions::mixing_into),
+                    },
+                };
+                let (task, effects) = self.together.update(message, &cx);
+                let applied: Vec<_> = effects
+                    .into_iter()
+                    .map(|effect| self.apply(effect))
+                    .collect();
+                return Task::batch(applied).chain(task);
+            }
+        }
+        self.settings
+            .update(settings::Message::Change(prefs), &self.services)
+    }
+
+    /// Does what the Listen Together room asks of the player.
+    fn apply(&mut self, effect: together::Effect) -> Task<Message> {
+        match effect {
+            together::Effect::Load(songs) => {
+                self.player.queue.set(&songs, 0);
+                self.start()
+            }
+            together::Effect::SetQueue(songs) => {
+                self.player.queue.set(&songs, 0);
+                Task::none()
+            }
+            together::Effect::Seek(position) => {
+                if let Some(player) = &self.services.player {
+                    player.seek(position);
+                }
+                self.player.position = position;
+                Task::none()
+            }
+            together::Effect::Paused(paused) => {
+                if let Some(player) = &self.services.player {
+                    player.set_paused(paused);
+                }
+                self.read_player();
+                Task::none()
+            }
+            together::Effect::EnqueueNext(song) => {
+                self.player.queue.enqueue_next(*song);
+                Task::none()
+            }
+        }
+    }
+
     fn read_player(&mut self) {
         if let Some(player) = &self.services.player {
             self.player.state = player.play_state();
@@ -2126,6 +2242,7 @@ impl App {
         if let Some(studio) = &self.studio {
             subscriptions.push(studio.subscription());
         }
+        subscriptions.push(self.together.subscription());
         Subscription::batch(subscriptions)
     }
 
@@ -2224,6 +2341,8 @@ impl App {
                     .song()
                     .is_some_and(|song| song.video_id == menu.song.video_id),
                 sleep: &self.sleep,
+                room: self.together.room_code(),
+                guest: self.together.is_guest(),
                 speed: self.speed.rate,
                 window: self.window,
             };
@@ -2238,6 +2357,12 @@ impl App {
         }
         if let Some(profile) = self.profile.overlay(&self.covers) {
             layers = layers.push(profile);
+        }
+        if let Some(panel) =
+            self.together
+                .overlay(&self.settings.prefs, self.account_info(), &self.covers)
+        {
+            layers = layers.push(panel);
         }
         if let Some(studio) = &self.studio {
             layers = layers.push(opaque(
@@ -3047,6 +3172,7 @@ mod tests {
             feeds: feeds::Feeds::default(),
             profile: profile::Profile::default(),
             studio: None,
+            together: together::Room::default(),
             comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
         }

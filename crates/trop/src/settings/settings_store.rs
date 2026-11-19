@@ -170,6 +170,13 @@ pub struct SettingsStore {
     #[serde(rename = "recap.dismissedMonth")]
     pub recap_dismissed_month: String,
 
+    // Listen Together
+    #[serde(rename = "settings.listenTogetherServerURL")]
+    pub listen_together_server_url: String,
+    /// Empty: the account's name.
+    #[serde(rename = "settings.listenTogetherUsername")]
+    pub listen_together_username: String,
+
     // Sync
     #[serde(rename = "settings.syncArtists")]
     pub sync_artists: bool,
@@ -211,6 +218,8 @@ impl Default for SettingsStore {
             lyrics_provider_order: Vec::new(),
             track_play_history: true,
             recap_dismissed_month: String::new(),
+            listen_together_server_url: crate::listen_together::DEFAULT_SERVER_URL.to_owned(),
+            listen_together_username: String::new(),
             sync_artists: true,
             sync_playlists: true,
             sync_albums: true,

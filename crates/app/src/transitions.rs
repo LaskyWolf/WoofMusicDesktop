@@ -60,6 +60,11 @@ impl Transitions {
         lock(&self.shared.promoted).take()
     }
 
+    /// The song a running mix is fading into.
+    pub fn mixing_into(&self) -> Option<String> {
+        lock(&self.shared.state).mixing_into().map(str::to_owned)
+    }
+
     /// Swift `Crossfade.tick`, every app tick while a song is loaded.
     pub fn tick(&mut self, np: &NowPlayingState, services: &Arc<Services>) -> Task<Message> {
         let shared = &self.shared;

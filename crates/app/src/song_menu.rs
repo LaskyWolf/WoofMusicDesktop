@@ -61,6 +61,10 @@ pub struct Context<'a> {
     /// The menu's song is the one playing: Sleep Timer and Speed apply to it.
     pub playing: bool,
     pub sleep: &'a SleepTimer,
+    /// The Listen Together room's code, while in one.
+    pub room: Option<&'a str>,
+    /// In a room, not its host: songs can be suggested.
+    pub guest: bool,
     pub speed: f64,
     pub window: Size,
 }
@@ -86,6 +90,10 @@ pub enum Action {
     RadioStart,
     GoTo(Route),
     CopyLink,
+    /// Asks the Listen Together host to play the song.
+    Suggest,
+    /// Opens the Listen Together panel.
+    ListenTogether,
     /// Opens the share card studio for the song.
     ShareCard,
     Download,
@@ -176,6 +184,13 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
         item(icons::PLAY_NEXT, "Play Next", Action::PlayNext),
         item(icons::ADD_QUEUE, "Add to Queue", Action::AddToQueue),
     ];
+    if context.guest {
+        items.push(item(
+            crate::together::PEOPLE,
+            "Suggest to Room",
+            Action::Suggest,
+        ));
+    }
     if context.account {
         items.push(if context.liked {
             item(icons::HEART_FILL, "Unlike", Action::Like(false))
@@ -219,6 +234,14 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
             None => "Sleep Timer…".to_owned(),
         };
         items.push(item(icons::MOON, &sleep, Action::Open(Page::Sleep)));
+        let together = context.room.map_or("Listen Together…".to_owned(), |code| {
+            format!("Listen Together · {code}")
+        });
+        items.push(item(
+            crate::together::PEOPLE,
+            &together,
+            Action::ListenTogether,
+        ));
         let speed = format!("Speed · {}", PlaybackSpeed::label(context.speed));
         items.push(item(icons::SPEED, &speed, Action::Open(Page::Speed)));
     }
