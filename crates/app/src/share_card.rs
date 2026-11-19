@@ -11,7 +11,10 @@ use iced::advanced::widget::Id;
 use iced::font::Weight;
 use iced::gradient::Linear;
 use iced::widget::canvas::{self, Frame, LineDash, Path, Stroke};
-use iced::widget::{Space, button, column, container, image, mouse_area, pin, row, stack, text};
+use iced::widget::{
+    Space, button, column, container, image, mouse_area, pin, responsive, row, scrollable, stack,
+    text,
+};
 use iced::{
     Alignment, Background, Border, Color, Element, Font, Gradient, Length, Point, Radians,
     Rectangle, Shadow, Size, Subscription, Task, Vector, mouse, window,
@@ -436,7 +439,19 @@ impl Studio {
         Subscription::batch(list)
     }
 
+    /// The window is the room it has: below 688 px the options scroll and the
+    /// card scrolls, so Save, Cancel and Done stay reachable.
     pub fn view(&self) -> Element<'_, Message> {
+        responsive(|window| {
+            container(self.panel(window.height))
+                .center(Length::Fill)
+                .into()
+        })
+        .into()
+    }
+
+    fn panel(&self, window_height: f32) -> Element<'_, Message> {
+        let height = (HEIGHT + 48.0).min((window_height - 24.0).max(240.0));
         let card = mouse_area(card(
             &self.content,
             self.style,
@@ -455,18 +470,23 @@ impl Studio {
             },
             ..container::Style::default()
         });
-        let side = self.tray();
+        let card: Element<'_, Message> = if height < HEIGHT + 48.0 {
+            scrollable(card).into()
+        } else {
+            card.into()
+        };
+        let side = self.tray(height - 48.0);
         let content = row![card, side].spacing(28).padding(24);
         ui::glass_panel(
             11,
             24.0,
             Length::Fixed(WIDTH + TRAY + 28.0 + 48.0),
-            Length::Fixed(HEIGHT + 48.0),
+            Length::Fixed(height),
             content,
         )
     }
 
-    fn tray(&self) -> Element<'_, Message> {
+    fn tray(&self, height: f32) -> Element<'_, Message> {
         let style = self.style;
         let chips = |options: Vec<(String, bool, Msg)>| {
             iced::widget::Row::with_children(
@@ -510,8 +530,7 @@ impl Studio {
             ),
         ]
         .spacing(8)
-        .width(Length::Fixed(TRAY))
-        .height(Length::Fixed(HEIGHT));
+        .width(Length::Fixed(TRAY - 24.0));
         if !self.content.lines.is_empty() {
             tray = tray.push(group("Text")).push(chips(
                 TEXTS
@@ -624,10 +643,11 @@ impl Studio {
                 Message::Studio(Msg::CopyLink),
             ));
         }
-        tray.push(Space::new().height(Length::Fill))
-            .push(status)
-            .push(actions)
-            .push(
+        column![
+            scrollable(tray).height(Length::Fill),
+            column![
+                status,
+                actions,
                 row![
                     ui::pill_button(
                         if self.from_lyrics { "Back" } else { "Cancel" },
@@ -636,8 +656,13 @@ impl Studio {
                     ui::pill_button("Done", Message::Studio(Msg::Done)),
                 ]
                 .spacing(8),
-            )
-            .into()
+            ]
+            .spacing(8),
+        ]
+        .spacing(8)
+        .width(Length::Fixed(TRAY))
+        .height(Length::Fixed(height))
+        .into()
     }
 }
 
