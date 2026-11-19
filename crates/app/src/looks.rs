@@ -86,7 +86,11 @@ impl Looks {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
         let angle = 4.0 + (nanos % 800) as f32 / 100.0;
-        self.cover = Some(if (nanos / 1000).is_multiple_of(2) { angle } else { -angle });
+        self.cover = Some(if (nanos / 1000).is_multiple_of(2) {
+            angle
+        } else {
+            -angle
+        });
     }
 
     pub fn bloom_start(&mut self, now: Instant) {
