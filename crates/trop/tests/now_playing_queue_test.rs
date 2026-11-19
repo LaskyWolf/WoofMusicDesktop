@@ -126,3 +126,32 @@ fn a_restored_index_is_clamped_and_a_stale_play_next_dropped() {
     assert_eq!(queue.index, 1);
     assert_eq!(queue.saved().play_next_end, None);
 }
+
+#[test]
+fn a_song_removed_while_shuffled_stays_removed_after_unshuffle() {
+    let mut queue = queue(&["a", "b", "c", "d", "e"], 0);
+    queue.shuffle();
+    let removed = ids(&queue)[2].to_owned();
+    queue.remove(2);
+    queue.unshuffle();
+    assert_eq!(queue.songs.len(), 4);
+    assert!(!ids(&queue).contains(&removed.as_str()));
+}
+
+#[test]
+fn queue_edge_cases_do_not_panic() {
+    let mut empty = Queue::default();
+    empty.move_song(0, 0);
+    empty.remove(0);
+    empty.shuffle();
+    empty.unshuffle();
+    assert!(empty.song().is_none() && !empty.has_next() && !empty.has_previous());
+
+    let mut one = queue(&["a"], 0);
+    one.shuffle();
+    one.move_song(0, 0);
+    one.move_song(0, 5);
+    one.remove(0);
+    one.unshuffle();
+    assert_eq!((ids(&one), one.index), (vec!["a"], 0));
+}

@@ -110,7 +110,13 @@ impl Queue {
         if index >= self.songs.len() || index == self.index {
             return;
         }
-        Arc::make_mut(&mut self.songs).remove(index);
+        let removed = Arc::make_mut(&mut self.songs).remove(index);
+        // Turning shuffle off must not bring the song back.
+        if let Some(original) = &mut self.original
+            && let Some(at) = original.iter().position(|s| s.video_id == removed.video_id)
+        {
+            original.remove(at);
+        }
         if index < self.index {
             self.index -= 1;
         }
