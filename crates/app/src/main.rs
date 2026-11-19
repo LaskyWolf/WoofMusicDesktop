@@ -12,6 +12,7 @@ mod media_controls;
 mod now_playing;
 mod pages;
 mod playlist_edit;
+mod profile;
 mod services;
 mod settings;
 mod song_menu;
@@ -120,6 +121,8 @@ pub enum Route {
     History,
     /// New releases from followed artists.
     Activity,
+    /// The account, Woof Recap and badges.
+    Profile,
 }
 
 impl Route {
@@ -152,7 +155,8 @@ impl Route {
             | Route::Settings
             | Route::Equalizer
             | Route::History
-            | Route::Activity => None,
+            | Route::Activity
+            | Route::Profile => None,
         }
     }
 }
@@ -311,6 +315,7 @@ struct App {
     report: Option<Arc<YouTubeHistoryReport>>,
     /// The History and Activity pages.
     feeds: feeds::Feeds,
+    profile: profile::Profile,
     /// Crossfades and AutoMix between songs; `None` without libmpv.
     transitions: Option<Transitions>,
     session: Session,
@@ -494,6 +499,9 @@ pub enum Message {
     SkipNonMusic(bool),
     /// The History and Activity pages.
     Feeds(feeds::Msg),
+    Profile(profile::Msg),
+    /// Loads these covers into the cache.
+    FetchCovers(Vec<String>),
 }
 
 impl App {
@@ -536,6 +544,7 @@ impl App {
             plays: PlaybackStateService::default(),
             report: None,
             feeds: feeds::Feeds::default(),
+            profile: profile::Profile::default(),
             // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
             comments: comments::Comments::default(),
             transitions: services
@@ -619,6 +628,7 @@ impl App {
                 media_controls::attach(),
                 saved,
                 settings::load(),
+                profile::dev_open(),
             ]),
         )
     }
@@ -1228,7 +1238,9 @@ impl App {
                 Task::none()
             }
             Message::Dismiss => {
-                if self.lyrics_extras.close_sheet() {
+                if self.profile.is_open() {
+                    self.update(Message::Profile(profile::Msg::Close))
+                } else if self.lyrics_extras.close_sheet() {
                     Task::none()
                 } else if self.menu.is_some() {
                     self.menu = None;
@@ -1297,6 +1309,11 @@ impl App {
                 }
             }
             Message::Settings(message) => self.settings.update(message, &self.services),
+            Message::Profile(message) => {
+                let cx = self.profile_cx();
+                self.profile.update(message, &cx)
+            }
+            Message::FetchCovers(urls) => self.fetch_covers(urls),
             Message::Feeds(message) => {
                 let task = self.feeds.update(message, &self.services);
                 let covers = self.fetch_covers(self.feeds.cover_urls());
@@ -1364,7 +1381,10 @@ impl App {
     fn enter(&mut self) -> Task<Message> {
         self.feeds.entered(&self.route().clone());
         match self.route().clone() {
-            Route::Home => Task::none(),
+            Route::Home => {
+                let cx = self.profile_cx();
+                self.profile.enter_home(&cx, &self.settings.prefs)
+            }
             Route::History => self
                 .feeds
                 .enter_history(&self.services, matches!(self.session, Session::SignedIn(_))),
@@ -1386,6 +1406,10 @@ impl App {
             Route::Search => focus(pages::SEARCH_INPUT),
             Route::Settings => settings::load(),
             Route::Equalizer => Task::none(),
+            Route::Profile => {
+                let cx = self.profile_cx();
+                self.profile.enter(&cx)
+            }
             Route::Explore => {
                 if self.explore.is_some() {
                     return Task::none();
@@ -2040,7 +2064,16 @@ impl App {
             );
         }
         subscriptions.push(self.lyrics_extras.subscription(self.showing_lyrics()));
+        subscriptions.push(self.profile.subscription());
         Subscription::batch(subscriptions)
+    }
+
+    fn profile_cx(&self) -> profile::Cx {
+        profile::Cx {
+            services: self.services.clone(),
+            signed_in: matches!(self.session, Session::SignedIn(_)),
+            time_bent: (self.defaults.podcast_speed - 1.0).abs() > 0.001,
+        }
     }
 
     fn showing_lyrics(&self) -> bool {
@@ -2138,6 +2171,9 @@ impl App {
         if let Some(composer) = self.lyrics_extras.overlay() {
             layers = layers.push(composer);
         }
+        if let Some(profile) = self.profile.overlay(&self.covers) {
+            layers = layers.push(profile);
+        }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
         }
@@ -2148,7 +2184,12 @@ impl App {
         let covers = &self.covers;
         let playing = self.player.song().map(|song| song.video_id.as_str());
         match self.route() {
-            Route::Home => pages::home(covers, &self.home, playing),
+            Route::Home => pages::home(
+                covers,
+                &self.home,
+                playing,
+                self.profile.home_card(&self.settings.prefs),
+            ),
             Route::Library => match &self.session {
                 Session::SignedIn(_) => match &self.library {
                     Some(Load::Loaded(library)) => pages::library(
@@ -2177,6 +2218,11 @@ impl App {
             ),
             Route::Equalizer => equalizer::view(&self.defaults),
             Route::History => pages::history(covers, &self.feeds, playing),
+            Route::Profile => self.profile.view(
+                covers,
+                &self.session,
+                self.settings.prefs.track_play_history,
+            ),
             Route::Activity => match &self.session {
                 Session::SignedIn(_) => pages::activity(covers, self.feeds.activity.as_deref()),
                 session => pages::sign_in(
@@ -2517,55 +2563,67 @@ fn explore_covers(sections: &[ExploreSection]) -> Vec<String> {
         .collect()
 }
 
-/// The sidebar's foot: the account and Sign out, or Sign in.
+/// The sidebar's foot: the account, which opens Profile, and Sign out or Sign in.
 fn account<'a>(covers: &'a ui::Covers, session: &'a Session) -> Element<'a, Message> {
     const PHOTO: f32 = 32.0;
     const NAME: f32 = theme::SIDEBAR_WIDTH - 20.0 - 24.0 - PHOTO - 10.0;
-    let info = match session {
-        Session::SignedIn(info) => info,
-        Session::Guest | Session::SigningIn => {
-            // Quiet here: Library carries the teal Sign in.
-            let foot: Element<'a, Message> = if matches!(session, Session::SigningIn) {
-                text("Signing in…").size(14).color(theme::SECONDARY).into()
-            } else {
-                ui::pill_button("Sign in", Message::SignIn)
-            };
-            return container(foot).padding([8, 12]).into();
+    let sign_out = ("Sign out", Some(Message::SignOut));
+    let (name, photo, error, (link, action)) = match session {
+        Session::SignedIn(Some(Ok(info))) => (
+            info.name.as_str(),
+            info.thumbnail_url.as_deref(),
+            None,
+            sign_out,
+        ),
+        Session::SignedIn(Some(Err(error))) => {
+            ("Account unavailable", None, Some(error.as_str()), sign_out)
         }
+        Session::SignedIn(None) => ("Signed in", None, None, sign_out),
+        // Quiet here: Library carries the teal Sign in.
+        Session::SigningIn => ("Not Signed In", None, None, ("Signing in…", None)),
+        Session::Guest => (
+            "Not Signed In",
+            None,
+            None,
+            ("Sign in", Some(Message::SignIn)),
+        ),
     };
-    let (name, photo) = match info {
-        Some(Ok(info)) => (info.name.as_str(), info.thumbnail_url.as_deref()),
-        Some(Err(_)) => ("Account unavailable", None),
-        None => ("Signed in", None),
+    let quiet = |_: &iced::Theme, status| button::Style {
+        text_color: if status == button::Status::Hovered {
+            theme::TEXT
+        } else {
+            theme::SECONDARY
+        },
+        ..button::Style::default()
     };
-    let sign_out = button(text("Sign out").size(12))
-        .padding(0)
-        .on_press(Message::SignOut)
-        .style(|_, status| button::Style {
-            text_color: if status == button::Status::Hovered {
-                theme::TEXT
-            } else {
-                theme::SECONDARY
-            },
-            ..button::Style::default()
-        });
     let mut details = column![
         text(ui::fit(name, NAME, 14.0))
             .size(14)
             .font(theme::weight(Weight::Medium))
             .wrapping(text::Wrapping::None),
     ];
-    if let Some(Err(error)) = info {
-        details = details.push(text(error.as_str()).size(11).color(theme::SECONDARY));
+    if let Some(error) = error {
+        details = details.push(text(error).size(11).color(theme::SECONDARY));
     }
-    row![
-        ui::cover(covers, photo, PHOTO, PHOTO / 2.0),
-        details.push(sign_out).spacing(2),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .padding([8, 12])
-    .into()
+    let profile = button(
+        row![ui::cover(covers, photo, PHOTO, PHOTO / 2.0), details]
+            .spacing(10)
+            .align_y(Alignment::Center),
+    )
+    .padding(0)
+    .on_press(Message::Tab(Route::Profile))
+    .style(|_, _| button::Style {
+        text_color: theme::TEXT,
+        ..button::Style::default()
+    });
+    let link = button(text(link).size(12))
+        .padding(iced::Padding {
+            left: PHOTO + 10.0,
+            ..iced::Padding::ZERO
+        })
+        .on_press_maybe(action)
+        .style(quiet);
+    column![profile, link].spacing(2).padding([8, 12]).into()
 }
 
 /// Dev aid: WOOF_PAGE opens a page over Home at start: `library`, `explore`,
@@ -2588,6 +2646,7 @@ fn dev_route() -> Option<Route> {
             "settings" => Some(Route::Settings),
             "equalizer" => Some(Route::Equalizer),
             "history" => Some(Route::History),
+            "profile" => Some(Route::Profile),
             "activity" => Some(Route::Activity),
             _ => None,
         },
@@ -2908,6 +2967,7 @@ mod tests {
             saved_queue: SavedQueue::default(),
             report: None,
             feeds: feeds::Feeds::default(),
+            profile: profile::Profile::default(),
             comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
         }

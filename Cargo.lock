@@ -7626,6 +7626,7 @@ dependencies = [
  "env_logger",
  "iced",
  "image",
+ "jiff",
  "log",
  "playwire",
  "png 0.18.1",

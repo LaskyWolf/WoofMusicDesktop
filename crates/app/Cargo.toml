@@ -22,3 +22,4 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
 discord-rich-presence = "1.1.0"
 dirs = "7"
+jiff = "0.2.46"

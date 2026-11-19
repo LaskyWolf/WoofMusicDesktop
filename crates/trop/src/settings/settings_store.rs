@@ -166,6 +166,9 @@ pub struct SettingsStore {
     // Privacy
     #[serde(rename = "settings.trackPlayHistory")]
     pub track_play_history: bool,
+    /// "2026-9": the month whose Recap card ✕ hid from Home.
+    #[serde(rename = "recap.dismissedMonth")]
+    pub recap_dismissed_month: String,
 
     // Sync
     #[serde(rename = "settings.syncArtists")]
@@ -207,6 +210,7 @@ impl Default for SettingsStore {
             disabled_lyrics_providers: Vec::new(),
             lyrics_provider_order: Vec::new(),
             track_play_history: true,
+            recap_dismissed_month: String::new(),
             sync_artists: true,
             sync_playlists: true,
             sync_albums: true,

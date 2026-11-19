@@ -86,7 +86,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [ ] Share card looks: other backgrounds, frames and text styles, stickers, QR code, video (`ShareCardStudio`)
 - [x] Player settings: persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`, `NowPlaying`)
 - [x] Accent colour, library layout and gapless playback settings (`SettingsStore`)
-- [ ] Profile and Recap (`Profile/`)
+- [x] Profile and Recap (`Profile/`)
 - [ ] ListenTogether (`ListenTogether/`)
 
 Not ported (iPhone only): CarPlay, widgets, App Intents and quick actions, haptics, swipe gestures, alternate app icons, in-app updater.

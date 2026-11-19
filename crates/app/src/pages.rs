@@ -27,26 +27,36 @@ pub fn home<'a>(
     covers: &'a Covers,
     home: &'a Load<Vec<HomeSection>>,
     playing: Option<&str>,
+    recap_card: Option<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     let sections = match home {
         Load::Loaded(sections) => sections,
         Load::Loading => return ui::status(None, Message::Retry),
         Load::Failed(error) => return ui::status(Some(error), Message::Retry),
     };
+    // Swift shows the Recap card in Keep Listening's place.
+    let has_card = recap_card.is_some();
     ui::scroll_page(
-        sections
-            .iter()
-            .filter(|section| !section.items().is_empty())
-            .map(|section| {
-                let limit = if section.is_songs_only() { 12 } else { 10 };
-                ui::section(
-                    covers,
-                    section.display_title(),
-                    section.items(),
-                    limit,
-                    playing,
-                )
-            })
+        recap_card
+            .into_iter()
+            .chain(
+                sections
+                    .iter()
+                    .filter(|section| !section.items().is_empty())
+                    .filter(|section| {
+                        !(has_card && matches!(section, HomeSection::KeepListening(_)))
+                    })
+                    .map(|section| {
+                        let limit = if section.is_songs_only() { 12 } else { 10 };
+                        ui::section(
+                            covers,
+                            section.display_title(),
+                            section.items(),
+                            limit,
+                            playing,
+                        )
+                    }),
+            )
             .collect(),
     )
 }

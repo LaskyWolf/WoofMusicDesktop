@@ -1397,7 +1397,7 @@ fn card(composer: &Composer) -> Element<'_, Msg> {
 }
 
 /// Finds the bounds of the container with `target` as its id.
-fn find_bounds(target: Id) -> impl Operation<Rectangle> {
+pub(crate) fn find_bounds(target: Id) -> impl Operation<Rectangle> {
     struct Find {
         target: Id,
         found: Option<Rectangle>,
@@ -1423,7 +1423,7 @@ fn find_bounds(target: Id) -> impl Operation<Rectangle> {
 
 /// Cuts the card out of the window screenshot and writes it as a PNG in the
 /// Pictures folder; a taken name gets " 2", " 3"…
-fn save_card(
+pub(crate) fn save_card(
     shot: &window::Screenshot,
     bounds: Option<Rectangle>,
     name: &str,

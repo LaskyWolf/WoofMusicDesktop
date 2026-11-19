@@ -13,6 +13,7 @@ pub mod listen_brainz;
 pub mod networking;
 pub mod odesli;
 pub mod playback;
+pub mod profile;
 pub mod search;
 pub mod services;
 pub mod settings;

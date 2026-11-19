@@ -336,7 +336,8 @@ impl Services {
             | Route::Settings
             | Route::Equalizer
             | Route::History
-            | Route::Activity => Err("Not a detail page.".to_owned()),
+            | Route::Activity
+            | Route::Profile => Err("Not a detail page.".to_owned()),
         }
     }
 
