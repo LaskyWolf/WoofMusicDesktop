@@ -1,3 +1,4 @@
+pub mod comments_service;
 pub mod download_manager;
 pub mod library_pages;
 pub mod personalization_service;

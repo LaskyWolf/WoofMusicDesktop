@@ -78,7 +78,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Activity: new releases from followed artists (`Activity/`); a sidebar badge replaces the iOS notifications
 - [x] Sleep timer, playback speed, equalizer (`SleepTimer`, `PlaybackSpeed`, `Equalizer`)
 - [x] SponsorBlock skips the non-music parts of music videos (`SponsorBlock`)
-- [ ] Comments panel (`Comments/`)
+- [x] Comments panel: read, sort, replies, like, write (`Comments/`)
 - [x] Podcast episodes resume where they stopped (`EpisodePlaybackStore`)
 - [x] Lyrics extras: karaoke countdown, share card, provider order (`KaraokeCountdown`, `LyricShareCard`, `LyricsProviderOrderView`)
 - [x] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics

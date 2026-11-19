@@ -42,6 +42,7 @@ use trop::playback::playback_state_service::{PlayRecord, save};
 use trop::playback::youtube_history_report::YouTubeHistoryReport;
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
+use trop::services::comments_service::CommentsService;
 use trop::services::download_manager::{DownloadManager, Resolved};
 use trop::services::personalization_service::{self, RadioOptions};
 use trop::services::sync_bridge::SyncBridge;
@@ -61,6 +62,8 @@ pub struct Services {
     lyrics: Arc<LyricsService>,
     providers: StreamResolveProviders,
     http: reqwest::Client,
+    /// A song's YouTube comments.
+    pub comments: Arc<CommentsService>,
     /// The app's copy, for the requests that read a setting.
     settings: std::sync::RwLock<SettingsStore>,
 }
@@ -120,6 +123,7 @@ impl Services {
                 LyricsService::default_defaults_path()
                     .unwrap_or_else(|| std::env::temp_dir().join("woofmusic-lyrics.json")),
             )),
+            comments: Arc::new(CommentsService::new(client.clone())),
             client,
             player,
             db,
@@ -818,6 +822,7 @@ impl Services {
                 LyricsManager::new(Session::shared()),
                 dir.join("lyrics.json"),
             )),
+            comments: Arc::new(CommentsService::new(client.clone())),
             client,
             player: None,
             db,

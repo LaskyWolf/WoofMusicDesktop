@@ -61,7 +61,9 @@ Not yet, each in its own folder when its milestone starts:
 | --- | --- |
 | `Auth/CookieHarvest`, `LoginWebviewHarvest`, `SessionTokenRefresher` (webview login) | R5 |
 | A working `PoTokenGenerator` (needs the R5 webview) | R5 |
-| `YouTube/` (main-YouTube parsers, comments) | not planned |
+| `YouTube/` main-YouTube parsers, `CommentsParser+Report` | not planned |
+
+From `YouTube/`, `CommentModels` and `CommentsParser` are translated. The Report flow (`reportParams`, `CommentsParser+Report`) is left out, as WoofMusic has no Report item.
 
 ## Tests
 

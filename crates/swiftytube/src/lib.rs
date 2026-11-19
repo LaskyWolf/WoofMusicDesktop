@@ -8,3 +8,4 @@ pub mod networking;
 pub mod po_token;
 pub mod streaming;
 pub mod sync;
+pub mod youtube;

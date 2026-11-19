@@ -158,7 +158,7 @@ pub fn resize_edges<'a>() -> Element<'a, Message> {
 }
 
 /// Window button glyphs: 16×16, 1.5 px strokes, coloured by the button.
-mod icons {
+pub(crate) mod icons {
     pub const MINIMIZE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M3.5 8h9" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>"##;
     pub const MAXIMIZE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="3.75" y="3.75" width="8.5" height="8.5" rx="2" fill="none" stroke="#fff" stroke-width="1.5"/></svg>"##;
     pub const RESTORE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect x="3" y="5.5" width="7.5" height="7.5" rx="1.75" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M6 3h5.25A1.75 1.75 0 0 1 13 4.75V10" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>"##;

@@ -1,5 +1,6 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
 
+mod comments;
 mod downloads;
 mod equalizer;
 mod feeds;
@@ -293,6 +294,8 @@ struct App {
     /// Now Playing covers the page.
     now_playing: bool,
     queue_open: bool,
+    /// The comments panel at the right edge, in the queue's place.
+    comments: comments::Comments,
     /// Now Playing splits into the cover and the lyrics.
     lyrics_open: bool,
     /// The current song's lyrics, with its video id; fetched as each song starts.
@@ -424,6 +427,8 @@ pub enum Message {
     ToggleNowPlaying,
     ToggleQueue,
     ToggleLyrics,
+    ToggleComments,
+    Comments(comments::Msg),
     LyricsLoaded(String, Result<Arc<Lyrics>, String>),
     RetryLyrics,
     /// A lyric line was clicked: the song jumps to where it starts.
@@ -520,6 +525,8 @@ impl App {
             plays: PlaybackStateService::default(),
             report: None,
             feeds: feeds::Feeds::default(),
+            // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
+            comments: comments::Comments::default(),
             transitions: services
                 .player
                 .clone()
@@ -552,6 +559,8 @@ impl App {
             settings,
         };
         app.player.queue.is_repeat_on = app.defaults.repeat;
+        // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
+        app.comments.open = std::env::var("WOOF_COMMENTS").is_ok();
         app.speed.podcast_rate = app.defaults.podcast_speed;
         if let Some(player) = &services.player {
             player.set_volume(app.defaults.volume);
@@ -1069,6 +1078,7 @@ impl App {
                 if !self.queue_open {
                     return Task::none();
                 }
+                self.comments.open = false;
                 // The queue panel would cover the lyrics.
                 self.lyrics_open = false;
                 // Open on the playing song, a few rows below the top.
@@ -1078,12 +1088,34 @@ impl App {
                     scrollable::AbsoluteOffset { x: 0.0, y },
                 )
             }
+            Message::ToggleComments => {
+                self.comments.open = !self.comments.open;
+                if !self.comments.open {
+                    return Task::none();
+                }
+                // One panel at a time, like Swift's player; this one covers the lyrics too.
+                self.queue_open = false;
+                self.lyrics_open = false;
+                let video_id = self.player.song().map(|song| song.video_id.clone());
+                self.comments
+                    .follow(&self.services.comments, video_id.as_deref())
+            }
+            Message::Comments(message) => {
+                let task = self.comments.update(message, &self.services.comments);
+                let alert = match self.comments.alert.take() {
+                    Some(alert) => self.notify(&alert),
+                    None => Task::none(),
+                };
+                let avatars = self.fetch_covers(self.comments.avatar_urls());
+                Task::batch([task, alert, avatars])
+            }
             Message::ToggleLyrics => {
                 if self.lyrics_open && self.now_playing {
                     self.lyrics_open = false;
                 } else {
                     self.lyrics_open = true;
                     self.queue_open = false;
+                    self.comments.open = false;
                     self.now_playing = self.player.song().is_some();
                 }
                 Task::none()
@@ -1111,6 +1143,9 @@ impl App {
             Message::Dismiss => {
                 if self.menu.is_some() {
                     self.menu = None;
+                    Task::none()
+                } else if self.comments.open {
+                    self.comments.open = false;
                     Task::none()
                 } else if self.queue_open {
                     self.queue_open = false;
@@ -1536,8 +1571,11 @@ impl App {
 
     /// Jumps over a non-music part the song just reached (Swift `SponsorBlock`).
     fn skip_non_music(&mut self) {
+        // Before the file has loaded (no duration yet) mpv refuses the seek,
+        // and the segment would count as skipped.
         if !self.defaults.skip_non_music
             || self.player.state != PlayState::Playing
+            || self.player.duration <= 0.0
             || self.player.seeking.is_some()
         {
             return;
@@ -1725,6 +1763,8 @@ impl App {
             saved,
             self.fetch_lyrics(),
             segments,
+            self.comments
+                .follow(&self.services.comments, Some(&video_id)),
         ])
     }
 
@@ -1893,6 +1933,12 @@ impl App {
             &self.session,
             self.feeds.unseen(),
         ));
+        if self.comments.open && self.player.song().is_some() {
+            layers = layers.push(
+                self.comments
+                    .view(&self.covers, matches!(self.session, Session::SignedIn(_))),
+            );
+        }
         if self.queue_open && self.player.song().is_some() {
             layers = layers.push(now_playing::queue(
                 &self.covers,
@@ -2141,6 +2187,11 @@ impl App {
             Space::new().width(Length::Fill).into()
         };
         let lyrics = toggle(icons::LYRICS, Message::ToggleLyrics, self.showing_lyrics());
+        let comments = toggle(
+            comments::icons::COMMENTS,
+            Message::ToggleComments,
+            self.comments.open,
+        );
         let queue = toggle(icons::QUEUE, Message::ToggleQueue, self.queue_open);
         let download: Element<'_, Message> = match player.song() {
             Some(song) => downloads::bar_button(&self.downloads, song),
@@ -2198,7 +2249,7 @@ impl App {
                 .width(Length::FillPortion(1)),
             row![
                 Space::new().width(Length::Fill),
-                row![download, lyrics, queue, link, more].spacing(4),
+                row![download, lyrics, comments, queue, link, more].spacing(4),
                 volume
             ]
             .spacing(14)
@@ -2627,7 +2678,8 @@ mod icons {
     pub const NEXT: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4L4.2 5.5a.8.8 0 0 0-1.2.7zM12 6.2v11.6a.8.8 0 0 0 1.2.7l8.6-5.8a.8.8 0 0 0 0-1.4l-8.6-5.8a.8.8 0 0 0-1.2.7z" fill="#fff"/></svg>"##;
     pub const PREVIOUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7zM12 6.2v11.6a.8.8 0 0 1-1.2.7l-8.6-5.8a.8.8 0 0 1 0-1.4l8.6-5.8a.8.8 0 0 1 1.2.7z" fill="#fff"/></svg>"##;
     /// A speech bubble with two lines of text.
-    pub const LYRICS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 5h15a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H10l-4.2 3.3a.5.5 0 0 1-.8-.4V16.5h-.5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8 9.3h8M8 12.5h5"/></g></svg>"##;
+    /// `quote.bubble`: the lyrics, apart from the comments' text bubble.
+    pub const LYRICS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 4.5c4.7 0 8.5 3 8.5 6.8s-3.8 6.8-8.5 6.8c-.9 0-1.8-.1-2.6-.3l-3.9 2.2a.5.5 0 0 1-.7-.6l.8-3.1C4 15 3.5 13.2 3.5 11.3 3.5 7.5 7.3 4.5 12 4.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8.6 9.4h2.2v2.2c0 1-.5 1.8-1.5 2.2M13.2 9.4h2.2v2.2c0 1-.5 1.8-1.5 2.2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     pub const QUEUE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4 6h11M4 12h11M4 18h7"/></g><path d="M16 14.6v6.8a.6.6 0 0 0 .9.5l5.2-3.4a.6.6 0 0 0 0-1l-5.2-3.4a.6.6 0 0 0-.9.5z" fill="#fff"/></svg>"##;
     pub const HEART: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 8 3.4 4.5 7 4.5c2.1 0 3.6 1.1 5 3 1.4-1.9 2.9-3 5-3 3.6 0 5.6 3.5 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" fill="#fff"/></svg>"##;
     pub const TROPHY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 3h10v2h3.2a.8.8 0 0 1 .8.8V8a4 4 0 0 1-4.3 4A5 5 0 0 1 13 14.9V18h3a1 1 0 0 1 1 1v2H7v-2a1 1 0 0 1 1-1h3v-3.1A5 5 0 0 1 7.3 12 4 4 0 0 1 3 8V5.8a.8.8 0 0 1 .8-.8H7zm0 4H5v1a2 2 0 0 0 2 2zm10 0v3a2 2 0 0 0 2-2V7z" fill="#fff"/></svg>"##;
@@ -2690,6 +2742,7 @@ mod tests {
             episodes: EpisodePlaybackStore::default(),
             report: None,
             feeds: feeds::Feeds::default(),
+            comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
         }
     }
