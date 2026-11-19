@@ -9,14 +9,13 @@ use std::time::{Duration, Instant};
 use iced::advanced::widget::Id;
 use iced::advanced::widget::operation::{Operation, Outcome};
 use iced::font::Weight;
-use iced::gradient::Linear;
 use iced::widget::{
     Space, button, column, container, image, mouse_area, opaque, row, scrollable, slider, stack,
     text, text_editor, text_input, toggler,
 };
 use iced::{
-    Alignment, Background, Border, Color, Element, Gradient, Length, Padding, Radians, Rectangle,
-    Shadow, Subscription, Task, Vector, window,
+    Alignment, Background, Border, Color, Element, Length, Padding, Rectangle, Shadow,
+    Subscription, Task, Vector, window,
 };
 use trop::audio::lyrics::lyrics_manager::LyricSearchResult;
 use trop::audio::lyrics::lyrics_view;
@@ -33,9 +32,6 @@ type Msg = crate::Message;
 /// Swift `LyricShareComposer.maxLines`.
 const MAX_LINES: usize = 4;
 /// The card on screen; the saved PNG is this size times the display scale.
-const CARD_WIDTH: f32 = 324.0;
-const CARD_HEIGHT: f32 = CARD_WIDTH * 16.0 / 9.0;
-const CARD_ID: &str = "lyric-share-card";
 const MENU_WIDTH: f32 = 300.0;
 const PICK_SCROLL: &str = "lyric-share-lines";
 
@@ -51,7 +47,7 @@ pub struct State {
     copied: Option<String>,
     /// The lyrics service's refresh token the shown lyrics belong to.
     refresh_token: u64,
-    /// Dev aid WOOF_SHARE_CARD=pick, style or save: opens the share card once lyrics show.
+    /// Dev aid WOOF_SHARE_CARD=pick or style: opens the share card once lyrics show.
     dev_share: Option<String>,
     /// Dev aid WOOF_LYRICS_SHEET=edit or search: opens that sheet once lyrics show.
     dev_sheet: Option<String>,
@@ -125,16 +121,12 @@ struct Composer {
     cover: Option<image::Handle>,
     colors: [Rgb; 2],
     lines: Vec<String>,
+    starts: Vec<Option<f64>>,
+    video_id: String,
     /// Picked line indices, in lyric order.
     picked: Vec<usize>,
-    /// Second step: the card preview.
-    styling: bool,
-    /// Which of the three colour orders the card uses.
-    palette: usize,
     /// A fifth line was tapped: the counter turns red.
     full: bool,
-    saving: bool,
-    saved: Option<Result<PathBuf, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,13 +154,9 @@ pub enum Message {
     CheckRefresh,
     ShareCard,
     Pick(usize),
+    /// Opens the studio with the picked lines.
     Next,
-    Back,
-    Palette(usize),
     CloseComposer,
-    Save,
-    Shot(window::Screenshot, Option<Rectangle>),
-    Saved(Result<PathBuf, String>),
 }
 
 /// What `update` reads from the app.
@@ -397,17 +385,12 @@ impl State {
                 let step = self.dev_share.take();
                 let open = self.update(Message::ShareCard, cx);
                 if let Some(composer) = &mut self.composer
-                    && matches!(step.as_deref(), Some("style" | "save"))
+                    && step.as_deref() == Some("style")
                 {
                     if composer.picked.is_empty() {
                         composer.picked = (0..composer.lines.len().min(2)).collect();
                     }
-                    composer.styling = true;
-                }
-                if step.as_deref() == Some("save") {
-                    let save = Task::future(tokio::time::sleep(Duration::from_secs(1)))
-                        .map(|()| crate::Message::Lyrics(Message::Save));
-                    return Task::batch([open, save]);
+                    return Task::batch([open, Task::done(crate::Message::Lyrics(Message::Next))]);
                 }
                 open
             }
@@ -440,12 +423,10 @@ impl State {
                     cover: cx.artwork.map(|artwork| artwork.image.clone()),
                     colors: cx.artwork.map_or(FALLBACK_COLORS, |artwork| artwork.colors),
                     lines: lines.iter().map(|line| line.text.clone()).collect(),
+                    starts: lines.iter().map(|line| line.start_time).collect(),
+                    video_id: song.video_id.clone(),
                     picked: current.into_iter().collect(),
-                    styling: false,
-                    palette: 0,
                     full: false,
-                    saving: false,
-                    saved: None,
                 });
                 // The ticked line in view, a little below the top (a one-line row is 40 px).
                 let offset = current.map_or(0.0, |index| (index as f32 - 3.0).max(0.0) * 40.0);
@@ -469,68 +450,29 @@ impl State {
                 Task::none()
             }
             Message::Next => {
-                if let Some(composer) = &mut self.composer {
-                    composer.styling = !composer.picked.is_empty();
-                }
-                Task::none()
-            }
-            Message::Back => {
-                if let Some(composer) = &mut self.composer {
-                    composer.styling = false;
-                    composer.saved = None;
-                }
-                Task::none()
-            }
-            Message::Palette(palette) => {
-                if let Some(composer) = &mut self.composer {
-                    composer.palette = palette;
-                    composer.saved = None;
-                }
-                Task::none()
-            }
-            Message::CloseComposer => {
-                self.composer = None;
-                Task::none()
-            }
-            Message::Save => {
-                let Some(composer) = &mut self.composer else {
-                    return Task::none();
-                };
-                composer.saving = true;
-                composer.saved = None;
-                // What is on screen is what is saved: a screenshot cut to the card.
-                window::latest()
-                    .and_then(window::screenshot)
-                    .then(|shot| {
-                        iced::advanced::widget::operate(find_bounds(Id::new(CARD_ID)))
-                            .map(Some)
-                            .chain(Task::done(None))
-                            .collect()
-                            .map(move |found| {
-                                Message::Shot(shot.clone(), found.into_iter().flatten().next())
-                            })
-                    })
-                    .map(crate::Message::Lyrics)
-            }
-            Message::Shot(shot, bounds) => {
                 let Some(composer) = &self.composer else {
                     return Task::none();
                 };
-                let name = format!("{} – {}", composer.title, composer.artist);
-                Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || save_card(&shot, bounds, &name))
-                            .await
-                            .map_err(|error| error.to_string())?
-                    },
-                    |result| crate::Message::Lyrics(Message::Saved(result)),
-                )
-            }
-            Message::Saved(result) => {
-                if let Some(composer) = &mut self.composer {
-                    composer.saving = false;
-                    composer.saved = Some(result);
+                if composer.picked.is_empty() {
+                    return Task::none();
                 }
+                let content = crate::share_card::Content {
+                    lines: composer
+                        .picked
+                        .iter()
+                        .map(|&i| composer.lines[i].clone())
+                        .collect(),
+                    title: composer.title.clone(),
+                    artist: composer.artist.clone(),
+                    cover: composer.cover.clone(),
+                    colors: composer.colors,
+                    start_time: composer.picked.first().and_then(|&i| composer.starts[i]),
+                    video_id: Some(composer.video_id.clone()),
+                };
+                Task::done(crate::Message::OpenStudio(content, true))
+            }
+            Message::CloseComposer => {
+                self.composer = None;
                 Task::none()
             }
         }
@@ -562,7 +504,6 @@ impl State {
     /// The share card composer or a lyrics sheet over the whole window, while one is open.
     pub fn overlay(&self) -> Option<Element<'_, Msg>> {
         let (body, close) = match (&self.composer, &self.sheet) {
-            (Some(composer), _) if composer.styling => (studio(composer), Message::CloseComposer),
             (Some(composer), _) => (picker(composer), Message::CloseComposer),
             (None, Some(Sheet::Edit { title, text, .. })) => {
                 (edit_sheet(title, text), Message::CloseSheet)
@@ -1199,201 +1140,6 @@ fn picker(composer: &Composer) -> Element<'_, Msg> {
         Length::Fixed(620.0),
         column![header, list].padding(iced::Padding::ZERO.bottom(10)),
     )
-}
-
-/// Step 2 (Swift `ShareCardStudio`): the card, its colours, and Save Image.
-fn studio(composer: &Composer) -> Element<'_, Msg> {
-    let swatch = |index: usize| {
-        let [a, b] = palette(composer.colors, index);
-        let selected = composer.palette == index;
-        button(Space::new().width(36).height(36))
-            .padding(0)
-            .on_press(crate::Message::Lyrics(Message::Palette(index)))
-            .style(move |_, _| button::Style {
-                background: Some(Background::Gradient(Gradient::Linear(
-                    Linear::new(Radians(2.4)).add_stop(0.0, a).add_stop(1.0, b),
-                ))),
-                border: Border::default()
-                    .rounded(18)
-                    .width(if selected { 3 } else { 1 })
-                    .color(if selected {
-                        theme::TEXT
-                    } else {
-                        theme::PRESSED
-                    }),
-                ..button::Style::default()
-            })
-    };
-    let status: Element<'_, Msg> = match &composer.saved {
-        Some(Ok(path)) => text(format!("Saved to {}", path.display()))
-            .size(13)
-            .color(theme::SECONDARY)
-            .into(),
-        Some(Err(error)) => text(format!("The image was not saved: {error}"))
-            .size(13)
-            .color(theme::CLOSE)
-            .into(),
-        None => Space::new().into(),
-    };
-    let side = column![
-        text("Style").size(22).font(theme::weight(Weight::Bold)),
-        text(ui::fit(&composer.title, 230.0, 13.0))
-            .size(13)
-            .color(theme::SECONDARY),
-        Space::new().height(12),
-        text("Colours").size(14).font(theme::weight(Weight::Medium)),
-        row![swatch(0), swatch(1), swatch(2)].spacing(10),
-        Space::new().height(Length::Fill),
-        status,
-        ui::accent_button(
-            if composer.saving {
-                "Saving…"
-            } else {
-                "Save Image"
-            },
-            None,
-            (!composer.saving).then_some(crate::Message::Lyrics(Message::Save)),
-        ),
-        row![
-            ui::pill_button("Back", crate::Message::Lyrics(Message::Back)),
-            ui::pill_button("Done", crate::Message::Lyrics(Message::CloseComposer)),
-        ]
-        .spacing(8),
-    ]
-    .spacing(8)
-    .width(Length::Fixed(230.0))
-    .height(Length::Fixed(CARD_HEIGHT));
-    let content = row![card(composer), side].spacing(28).padding(24);
-    // The glass needs a fixed size: the card, the side column and the gaps.
-    ui::glass_panel(
-        11,
-        24.0,
-        Length::Fixed(CARD_WIDTH + 230.0 + 28.0 + 48.0),
-        Length::Fixed(CARD_HEIGHT + 48.0),
-        content,
-    )
-}
-
-/// The card's three colours, rotated so each palette leads with a different one
-/// (Swift `ShareCardContent.palette`).
-fn palette(colors: [Rgb; 2], index: usize) -> [Color; 2] {
-    let rgb = |[r, g, b]: Rgb| Color::from_rgb(r as f32, g as f32, b as f32);
-    let (a, b) = (rgb(colors[0]), rgb(colors[1]));
-    let deep = Color::from_rgb(a.r * 0.35, a.g * 0.35, a.b * 0.35);
-    match index % 3 {
-        0 => [a, b],
-        1 => [b, deep],
-        _ => [deep, a],
-    }
-}
-
-/// The 9:16 card: the cover's colours with a glow, the cover as a taped
-/// photo with the title under it, the picked lines on paper strips, and the
-/// WoofMusic credit (Swift `ShareCard` with the Cover Glow, Polaroid and Paper looks).
-fn card(composer: &Composer) -> Element<'_, Msg> {
-    let [top, bottom] = palette(composer.colors, composer.palette);
-    let base = Linear::new(Radians(std::f32::consts::PI))
-        .add_stop(0.0, top)
-        .add_stop(1.0, bottom);
-    let glow = Linear::new(Radians(2.2))
-        .add_stop(
-            0.0,
-            Color {
-                a: 0.5,
-                ..Color::WHITE
-            },
-        )
-        .add_stop(0.45, Color::TRANSPARENT);
-    let photo_side = 150.0;
-    let photo_image: Element<'_, Msg> = match &composer.cover {
-        Some(cover) => image(cover.clone())
-            .width(photo_side)
-            .height(photo_side)
-            .content_fit(iced::ContentFit::Cover)
-            .into(),
-        None => container(ui::icon(crate::icons::LYRICS, 48.0))
-            .center(photo_side)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(bottom)),
-                ..container::Style::default()
-            })
-            .into(),
-    };
-    let photo = container(
-        column![
-            photo_image,
-            text(ui::fit(&composer.title, photo_side, 13.0))
-                .size(13)
-                .font(theme::weight(Weight::Bold))
-                .color(Color::from_rgb8(0x22, 0x22, 0x22)),
-            text(ui::fit(&composer.artist, photo_side, 11.0))
-                .size(11)
-                .color(Color::from_rgb8(0x55, 0x55, 0x55)),
-        ]
-        .spacing(4),
-    )
-    .padding(iced::Padding::new(8.0).bottom(12.0))
-    .style(|_| container::Style {
-        background: Some(Background::Color(Color::from_rgb8(0xFA, 0xF8, 0xF2))),
-        border: Border::default().rounded(3),
-        shadow: Shadow {
-            color: Color {
-                a: 0.35,
-                ..Color::BLACK
-            },
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 18.0,
-        },
-        ..container::Style::default()
-    });
-    let lines = column(composer.picked.iter().map(|&index| {
-        container(
-            text(composer.lines[index].as_str())
-                .size(17)
-                .font(theme::weight(Weight::Bold))
-                .color(Color::from_rgb8(0x1A, 0x1A, 0x1A)),
-        )
-        .padding([6, 10])
-        .style(|_| container::Style {
-            background: Some(Background::Color(Color::from_rgb8(0xFA, 0xF8, 0xF2))),
-            border: Border::default().rounded(2),
-            ..container::Style::default()
-        })
-        .into()
-    }))
-    .spacing(6);
-    let credit = row![
-        text("WoofMusic")
-            .size(12)
-            .font(theme::weight(Weight::Bold))
-            .color(Color {
-                a: 0.85,
-                ..Color::WHITE
-            }),
-    ];
-    let layout = column![
-        container(photo).center_x(Length::Fill),
-        Space::new().height(Length::Fill),
-        lines,
-        Space::new().height(18),
-        credit,
-    ]
-    .padding(22);
-    let fill = |gradient: Linear| {
-        container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Gradient(Gradient::Linear(gradient))),
-                ..container::Style::default()
-            })
-    };
-    container(stack![fill(base), fill(glow), layout])
-        .id(CARD_ID)
-        .width(CARD_WIDTH)
-        .height(CARD_HEIGHT)
-        .clip(true)
-        .into()
 }
 
 /// Finds the bounds of the container with `target` as its id.

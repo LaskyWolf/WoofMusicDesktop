@@ -15,6 +15,7 @@ mod playlist_edit;
 mod profile;
 mod services;
 mod settings;
+mod share_card;
 mod song_menu;
 mod theme;
 mod title_bar;
@@ -28,7 +29,9 @@ use std::time::{Duration, Instant};
 
 use iced::font::Weight;
 use iced::widget::operation::{focus, scroll_to};
-use iced::widget::{Space, button, column, container, row, scrollable, slider, stack, svg, text};
+use iced::widget::{
+    Space, button, column, container, opaque, row, scrollable, slider, stack, svg, text,
+};
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Padding, Point, Size, Subscription,
     Task, keyboard, window,
@@ -316,6 +319,8 @@ struct App {
     /// The History and Activity pages.
     feeds: feeds::Feeds,
     profile: profile::Profile,
+    /// The share card studio, over everything while open.
+    studio: Option<share_card::Studio>,
     /// Crossfades and AutoMix between songs; `None` without libmpv.
     transitions: Option<Transitions>,
     session: Session,
@@ -500,6 +505,9 @@ pub enum Message {
     /// The History and Activity pages.
     Feeds(feeds::Msg),
     Profile(profile::Msg),
+    /// Opens the share card studio; `true` when it comes from the lyric picker.
+    OpenStudio(share_card::Content, bool),
+    Studio(share_card::Msg),
     /// Loads these covers into the cache.
     FetchCovers(Vec<String>),
 }
@@ -545,6 +553,7 @@ impl App {
             report: None,
             feeds: feeds::Feeds::default(),
             profile: profile::Profile::default(),
+            studio: None,
             // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
             comments: comments::Comments::default(),
             transitions: services
@@ -1085,13 +1094,16 @@ impl App {
                 };
                 self.read_player();
                 // Dev aid: WOOF_MENU=1 opens the playing song's menu;
-                // =radio and =new-playlist open those pages of it.
+                // =radio and =new-playlist open those pages of it; =share-card its studio.
                 let menu = match std::env::var("WOOF_MENU").as_deref() {
                     Ok("radio") => Task::done(Message::MoreMenu).chain(Task::done(
                         Message::MenuAction(song_menu::Action::StartRadio),
                     )),
                     Ok("new-playlist") => Task::done(Message::MoreMenu).chain(Task::done(
                         Message::MenuAction(song_menu::Action::NewPlaylist),
+                    )),
+                    Ok("share-card") => Task::done(Message::MoreMenu).chain(Task::done(
+                        Message::MenuAction(song_menu::Action::ShareCard),
                     )),
                     Ok(_) => Task::done(Message::MoreMenu),
                     Err(_) => Task::none(),
@@ -1238,7 +1250,9 @@ impl App {
                 Task::none()
             }
             Message::Dismiss => {
-                if self.profile.is_open() {
+                if self.studio.is_some() {
+                    self.update(Message::Studio(share_card::Msg::Back))
+                } else if self.profile.is_open() {
                     self.update(Message::Profile(profile::Msg::Close))
                 } else if self.lyrics_extras.close_sheet() {
                     Task::none()
@@ -1313,6 +1327,27 @@ impl App {
                 let cx = self.profile_cx();
                 self.profile.update(message, &cx)
             }
+            Message::OpenStudio(content, from_lyrics) => {
+                self.studio = Some(share_card::Studio::new(content, from_lyrics));
+                Task::none()
+            }
+            Message::Studio(message) => match (message, &mut self.studio) {
+                // Back shows the lyric picker again; Done closes it too.
+                (share_card::Msg::Back, _) => {
+                    self.studio = None;
+                    Task::none()
+                }
+                (share_card::Msg::Done, studio) => {
+                    let close = studio.take().is_some_and(|s| s.from_lyrics);
+                    if close {
+                        self.update(Message::Lyrics(lyrics::Message::CloseComposer))
+                    } else {
+                        Task::none()
+                    }
+                }
+                (message, Some(studio)) => studio.update(message),
+                (_, None) => Task::none(),
+            },
             Message::FetchCovers(urls) => self.fetch_covers(urls),
             Message::Feeds(message) => {
                 let task = self.feeds.update(message, &self.services);
@@ -1617,6 +1652,29 @@ impl App {
                     .update(settings::Message::CopyLink(song.video_id), &self.services),
                 self.notify("Song link copied"),
             ]),
+            Action::ShareCard => {
+                let content = share_card::Content {
+                    lines: Vec::new(),
+                    title: song.title.clone(),
+                    artist: ui::artists(&song.artists),
+                    cover: None,
+                    colors: trop::utilities::ui_image_color_extraction::FALLBACK_COLORS,
+                    start_time: None,
+                    video_id: Some(song.video_id.clone()),
+                };
+                // The cover first, so the card opens complete.
+                match song.thumbnail_url.clone() {
+                    Some(url) => Task::perform(self.services.clone().artwork(url), move |art| {
+                        let mut content = content.clone();
+                        if let Some(art) = art {
+                            content.cover = Some(art.image);
+                            content.colors = art.colors;
+                        }
+                        Message::OpenStudio(content, false)
+                    }),
+                    None => Task::done(Message::OpenStudio(content, false)),
+                }
+            }
             Action::Download => self.update_download(downloads::Msg::Start(Box::new(song))),
             Action::RemoveFromQueue(index) => {
                 self.player.queue.remove(index);
@@ -2065,6 +2123,9 @@ impl App {
         }
         subscriptions.push(self.lyrics_extras.subscription(self.showing_lyrics()));
         subscriptions.push(self.profile.subscription());
+        if let Some(studio) = &self.studio {
+            subscriptions.push(studio.subscription());
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -2168,11 +2229,28 @@ impl App {
             };
             layers = layers.push(song_menu::view(menu, context));
         }
-        if let Some(composer) = self.lyrics_extras.overlay() {
+        if let Some(composer) = self
+            .lyrics_extras
+            .overlay()
+            .filter(|_| self.studio.is_none())
+        {
             layers = layers.push(composer);
         }
         if let Some(profile) = self.profile.overlay(&self.covers) {
             layers = layers.push(profile);
+        }
+        if let Some(studio) = &self.studio {
+            layers = layers.push(opaque(
+                container(opaque(studio.view()))
+                    .center(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(Color {
+                            a: 0.6,
+                            ..Color::BLACK
+                        })),
+                        ..container::Style::default()
+                    }),
+            ));
         }
         if !self.maximized {
             layers = layers.push(title_bar::resize_edges().map(Message::TitleBar));
@@ -2968,6 +3046,7 @@ mod tests {
             report: None,
             feeds: feeds::Feeds::default(),
             profile: profile::Profile::default(),
+            studio: None,
             comments: comments::Comments::default(),
             playlist_edit: playlist_edit::State::default(),
         }

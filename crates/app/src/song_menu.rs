@@ -86,6 +86,8 @@ pub enum Action {
     RadioStart,
     GoTo(Route),
     CopyLink,
+    /// Opens the share card studio for the song.
+    ShareCard,
     Download,
     RemoveFromQueue(usize),
     Open(Page),
@@ -203,6 +205,7 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
     }
     items.push(item(icons::DOWNLOAD, "Download", Action::Download));
     items.push(item(icons::LINK, "Copy Song Link", Action::CopyLink));
+    items.push(item(icons::SHARE, "Share Card…", Action::ShareCard));
     if let Some(index) = menu.queue_index {
         items.push(item(
             icons::REMOVE,
@@ -559,6 +562,8 @@ pub mod icons {
     pub const ARTIST: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></g></svg>"##;
     pub const DOWNLOAD: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></g></svg>"##;
     pub const LINK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></g></svg>"##;
+    /// `square.and.arrow.up`.
+    pub const SHARE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4M8 11H6v9h12v-9h-2"/></g></svg>"##;
     pub const REMOVE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/></g></svg>"##;
     pub const MORE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="#fff"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></g></svg>"##;
     pub const SHUFFLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H21M3 17h3.5c1.4 0 2.4-.5 3.2-1.4M13.3 8.4C14.1 7.5 15.1 7 16.5 7H21M18 4l3 3-3 3M18 14l3 3-3 3"/></g></svg>"##;
