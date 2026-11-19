@@ -73,11 +73,15 @@ impl Registry {
         let Ok(bytes) = std::fs::read(path) else {
             return Self::default();
         };
-        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        let mut registry: Self = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             log::error!("profiles.json is unreadable, kept as profiles.json.bak: {error}");
             let _ = std::fs::rename(path, path.with_extension("json.bak"));
             Self::default()
-        })
+        });
+        // An edited file can list an account twice; the list shows it once.
+        let mut seen = std::collections::HashSet::new();
+        registry.profiles.retain(|p| seen.insert(p.id.clone()));
+        registry
     }
 
     pub fn save(&self) -> std::io::Result<()> {
@@ -211,6 +215,21 @@ mod tests {
         assert_eq!(Registry::load_from(&path), registry);
         let files = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(files, 1);
+    }
+
+    #[test]
+    fn an_account_listed_twice_loads_once() {
+        let dir = scratch("dupes");
+        let path = dir.join("profiles.json");
+        let entry = r#"{"id":"a","name":"A"}"#;
+        let json = format!(r#"{{"profiles":[{entry},{entry},{{"id":"b","name":"B"}}]}}"#);
+        std::fs::write(&path, json).unwrap();
+        let ids: Vec<_> = Registry::load_from(&path)
+            .profiles
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
     }
 
     #[test]

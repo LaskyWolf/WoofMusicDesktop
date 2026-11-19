@@ -644,6 +644,7 @@ impl Services {
             return;
         }
         blocking(move || {
+            let _lock = registry_lock();
             let mut registry = Registry::load();
             let id = match registry.current.clone() {
                 Some(id) => id,
@@ -689,6 +690,7 @@ impl Services {
         self.adopt(auth.clone()).await;
         let info = self.clone().account().await.ok();
         blocking(move || {
+            let _lock = registry_lock();
             let mut registry = Registry::load();
             let email = info.as_ref().and_then(|info| info.email.clone());
             let name = info
@@ -732,6 +734,7 @@ impl Services {
             let auth = load_profile_session(&id)
                 .ok_or("This account's session is missing. Sign in again.")?;
             keyring().save(&auth).map_err(|error| error.to_string())?;
+            let _lock = registry_lock();
             let mut registry = Registry::load();
             registry.active = registry.claim(&id);
             registry.current = Some(id);
@@ -741,28 +744,42 @@ impl Services {
         .unwrap_or_else(|| Err("Could not switch accounts.".into()))
     }
 
-    /// Swift `signOut`: removes this account from the list. `Some(id)`:
-    /// another saved account to switch to; `None`: now a guest.
-    pub async fn sign_out_profile(self: Arc<Self>) -> Option<String> {
-        let next = blocking(|| {
+    /// Swift `signOut`: removes this account from the list and opens the
+    /// first saved account whose session is still there. `true`: the app must
+    /// restart on it; `false`: now a guest.
+    pub async fn sign_out_profile(self: Arc<Self>) -> bool {
+        let switched = blocking(|| {
+            let _lock = registry_lock();
             let mut registry = Registry::load();
-            let leaving = registry.current.take();
-            if let Some(leaving) = &leaving {
-                registry.profiles.retain(|p| &p.id != leaving);
-                let _ = SecureStore::new(crate::APP_ID).delete(&profile_key(leaving));
+            if let Some(leaving) = registry.current.take() {
+                registry.profiles.retain(|p| p.id != leaving);
+                let _ = SecureStore::new(crate::APP_ID).delete(&profile_key(&leaving));
             }
-            let next = registry.profiles.first().map(|p| p.id.clone());
+            let next = registry
+                .profiles
+                .iter()
+                .find_map(|p| Some((p.id.clone(), load_profile_session(&p.id)?)));
+            // The next account's session replaces the signed-out one before
+            // the restart, so a failed switch never signs the old one back in.
+            let switched = match next {
+                Some((id, auth)) if keyring().save(&auth).is_ok() => {
+                    registry.active = registry.claim(&id);
+                    registry.current = Some(id);
+                    true
+                }
+                _ => false,
+            };
             if let Err(error) = registry.save() {
                 log::error!("Could not save the profiles: {error}");
             }
-            next
+            switched
         })
         .await
-        .flatten();
-        if next.is_none() {
+        .unwrap_or(false);
+        if !switched {
             self.sign_out().await;
         }
-        next
+        switched
     }
 
     /// The signed-in account. A guest-shaped answer means stale rotating
@@ -1183,6 +1200,15 @@ fn keyring() -> SecureAuthStore {
 }
 
 /// The keyring entry of a saved account's session.
+/// `profiles.json` is loaded, changed and saved whole: one change at a time.
+// ponytail: one lock per process; two app windows can still race (the
+// rename keeps the file whole, the last save wins). Add a file lock if needed.
+fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn profile_key(id: &str) -> String {
     format!("profile.{id}")
 }

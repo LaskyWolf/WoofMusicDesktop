@@ -514,7 +514,7 @@ pub enum Message {
     SwitchProfile(String),
     ProfileSwitched(Result<(), String>),
     /// Another saved account to switch to, or none.
-    SignedOut(Option<String>),
+    SignedOut(bool),
     Download(downloads::Msg),
     /// Creating, renaming, deleting and editing playlists.
     PlaylistEdit(playlist_edit::Msg),
@@ -969,11 +969,14 @@ impl App {
                 )
             }
             Message::SignOut => {
+                if self.profiles.profiles.len() > 1 && self.changing_account() {
+                    return self.notify("Accounts can't change while songs are downloading.");
+                }
                 self.session = Session::Guest;
                 Task::perform(self.services.clone().sign_out_profile(), Message::SignedOut)
             }
-            Message::SignedOut(Some(next)) => self.update(Message::SwitchProfile(next)),
-            Message::SignedOut(None) => {
+            Message::SignedOut(true) => restart(),
+            Message::SignedOut(false) => {
                 self.profiles = Registry::load();
                 self.update(Message::SessionReady(false))
             }
