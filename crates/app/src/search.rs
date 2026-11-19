@@ -432,7 +432,7 @@ impl State {
         page
     }
 
-    /// A section with its title, which drills into it.
+    /// A section with its title, which drills into it (not in Library).
     fn section<'a>(
         &self,
         covers: &'a Covers,
@@ -440,35 +440,33 @@ impl State {
         playing: Option<&str>,
     ) -> Element<'a, Message> {
         let open = self.filter == Filter::Section(section.title.clone());
-        let title = button(
-            row![
-                ui::section_title(&section.title),
-                ui::icon(
-                    if open {
-                        icons::CHEVRON_LEFT
-                    } else {
-                        icons::CHEVRON_RIGHT
-                    },
-                    18.0
-                )
-                .style(|_, _| iced::widget::svg::Style {
+        let mut heading = row![ui::section_title(&section.title)]
+            .spacing(4)
+            .align_y(Alignment::Center);
+        if self.filter != Filter::Library {
+            let glyph = if open {
+                icons::CHEVRON_LEFT
+            } else {
+                icons::CHEVRON_RIGHT
+            };
+            heading = heading.push(
+                ui::icon(glyph, 18.0).style(|_, _| iced::widget::svg::Style {
                     color: Some(theme::SECONDARY),
                 }),
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center),
-        )
-        .padding([2, 6])
-        .on_press_maybe(
-            (self.filter != Filter::Library).then(|| wrap(Msg::Section(section.title.clone()))),
-        )
-        .style(|_, status| button::Style {
-            background: (status == button::Status::Hovered)
-                .then_some(Background::Color(theme::HOVER)),
-            border: Border::default().rounded(10),
-            text_color: theme::TEXT,
-            ..button::Style::default()
-        });
+            );
+        }
+        let title = button(heading)
+            .padding([2, 6])
+            .on_press_maybe(
+                (self.filter != Filter::Library).then(|| wrap(Msg::Section(section.title.clone()))),
+            )
+            .style(|_, status| button::Style {
+                background: (status == button::Status::Hovered)
+                    .then_some(Background::Color(theme::HOVER)),
+                border: Border::default().rounded(10),
+                text_color: theme::TEXT,
+                ..button::Style::default()
+            });
         column![
             title,
             ui::section_items(covers, &section.items, usize::MAX, playing)
