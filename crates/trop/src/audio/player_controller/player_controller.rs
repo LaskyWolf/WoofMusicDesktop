@@ -57,6 +57,9 @@ struct Shared {
     /// While true, the outgoing song's end finishes the crossfade instead of
     /// stopping playback.
     is_crossfading: bool,
+    /// The decks swapped during the running mix: the playing deck is the
+    /// incoming song, so its end is the song's end, not the outgoing one's.
+    mix_promoted: bool,
     /// Events for the crossfade, taken by `take_deck_events`.
     events: DeckEvents,
     /// False once mpv rejects the AutoMix bass or effect filters.
@@ -153,6 +156,7 @@ impl PlayerController {
             gapless: true,
             speed: 1.0,
             is_crossfading: false,
+            mix_promoted: false,
             events: DeckEvents::default(),
             has_bass_filter: true,
             has_effect_filters: true,
@@ -332,11 +336,14 @@ impl PlayerController {
         shared.current_video_id = Some(video_id.to_string());
         shared.pending_video_id = None;
         shared.loudness = loudness;
+        shared.mix_promoted = true;
     }
 
     /// Swift `isCrossfading`.
     pub fn set_crossfading(&self, on: bool) {
-        lock(&self.shared).is_crossfading = on;
+        let mut shared = lock(&self.shared);
+        shared.is_crossfading = on;
+        shared.mix_promoted = false;
     }
 
     pub fn is_crossfading(&self) -> bool {
@@ -616,7 +623,7 @@ impl PlayerController {
             shared.current_video_id = None;
             shared.failed = true;
             shared.play_state = State::Stopped;
-        } else if is_eof && shared.is_crossfading {
+        } else if is_eof && shared.is_crossfading && !shared.mix_promoted {
             // The outgoing song ran out before the mix swapped decks.
             shared.events.outgoing_ended = true;
         } else if is_eof {
@@ -716,4 +723,51 @@ pub fn effects_graph(echo_delay: Option<f64>) -> String {
         delays.join("|"),
         decays.join("|")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared(is_crossfading: bool, mix_promoted: bool) -> Mutex<Shared> {
+        Mutex::new(Shared {
+            play_state: State::Playing,
+            current_video_id: None,
+            pending_video_id: None,
+            desired_playing: true,
+            failed: false,
+            volume: 1.0,
+            equalizer: None,
+            normalization: false,
+            loudness: None,
+            persistent_play_pause: false,
+            gapless: true,
+            speed: 1.0,
+            is_crossfading,
+            mix_promoted,
+            events: DeckEvents::default(),
+            has_bass_filter: true,
+            has_effect_filters: true,
+            has_logged_chain_failure: false,
+        })
+    }
+
+    #[test]
+    fn the_end_of_the_deck_before_the_swap_is_the_outgoing_song() {
+        let shared = shared(true, false);
+        PlayerController::handle_end_file(&shared, mpv_end_file_reason::Eof);
+        let shared = lock(&shared);
+        assert!(shared.events.outgoing_ended);
+        assert_eq!(shared.play_state, State::Playing);
+    }
+
+    #[test]
+    fn the_end_of_the_promoted_deck_ends_the_song() {
+        // The incoming song is shorter than the rest of the mix.
+        let shared = shared(true, true);
+        PlayerController::handle_end_file(&shared, mpv_end_file_reason::Eof);
+        let shared = lock(&shared);
+        assert!(!shared.events.outgoing_ended);
+        assert_eq!(shared.play_state, State::Stopped);
+    }
 }
