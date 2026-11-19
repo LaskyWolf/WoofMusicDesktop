@@ -1,3 +1,4 @@
+pub mod artist_kind_service;
 pub mod comments_service;
 pub mod download_manager;
 pub mod downloaded_collections;

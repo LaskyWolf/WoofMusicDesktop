@@ -893,6 +893,7 @@ pub fn songs<'a>(
 ) -> Element<'a, Message> {
     let (title, empty) = match route {
         Route::LikedSongs => ("Liked Songs", "Songs you like show up here."),
+        Route::Similar(_) => ("Similar Songs", "No similar tracks. Try again later."),
         _ => ("My Top 100", "The songs you play most show up here."),
     };
     let length: i64 = songs.iter().map(|song| song.duration).sum();

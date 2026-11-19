@@ -129,6 +129,8 @@ pub enum Route {
     TopSongs,
     /// Saved songs and downloads in progress.
     Downloads,
+    /// Songs like this one (Swift `SimilarSongsView`).
+    Similar(String),
     Settings,
     Equalizer,
     /// Plays from this app and YouTube Music's own history.
@@ -162,6 +164,7 @@ impl Route {
             Route::LikedSongs => Some("liked".to_owned()),
             Route::TopSongs => Some("top100".to_owned()),
             Route::Downloads => Some("downloads".to_owned()),
+            Route::Similar(id) => Some(format!("similar:{id}")),
             Route::Home
             | Route::Explore
             | Route::Library
@@ -528,6 +531,9 @@ pub enum Message {
     MenuAction(song_menu::Action),
     CloseMenu,
     MenuPlaylists(Vec<PlaylistEntity>),
+    /// An answer nobody needs to act on; the window still draws again (an artist kind arrived).
+    Noop,
+    MenuDetails(String, Box<services::SongDetails>),
     Likes(HashSet<String>),
     Like(Box<SongItem>, bool),
     Liked(Box<SongItem>, bool, Result<(), String>),
@@ -780,6 +786,16 @@ impl App {
                 Task::none()
             }
             Message::MenuAction(action) => self.menu_action(action),
+            Message::Noop => Task::none(),
+            Message::MenuDetails(id, details) => {
+                if let Some(menu) = &mut self.menu
+                    && menu.song.video_id == id
+                    && matches!(menu.page, song_menu::Page::Details(None))
+                {
+                    menu.page = song_menu::Page::Details(Some(details));
+                }
+                Task::none()
+            }
             Message::MenuPlaylists(list) => {
                 if let Some(menu) = &mut self.menu
                     && matches!(menu.page, song_menu::Page::Playlists(None))
@@ -1128,7 +1144,7 @@ impl App {
                 let (covers, album) = match &result {
                     Ok(detail) => (
                         self.fetch_covers(detail.cover_urls()),
-                        self.album_seen(detail),
+                        Task::batch([self.album_seen(detail), self.podcast_seen(detail)]),
                     ),
                     Err(_) => (Task::none(), Task::none()),
                 };
@@ -1219,7 +1235,7 @@ impl App {
                 };
                 self.read_player();
                 // Dev aid: WOOF_MENU=1 opens the playing song's menu;
-                // =radio and =new-playlist open those pages of it; =share-card its studio.
+                // =radio, =new-playlist, =details and =artists open those pages of it; =share-card its studio.
                 let menu = match std::env::var("WOOF_MENU").as_deref() {
                     Ok("radio") => Task::done(Message::MoreMenu).chain(Task::done(
                         Message::MenuAction(song_menu::Action::StartRadio),
@@ -1229,6 +1245,12 @@ impl App {
                     )),
                     Ok("share-card") => Task::done(Message::MoreMenu).chain(Task::done(
                         Message::MenuAction(song_menu::Action::ShareCard),
+                    )),
+                    Ok("details") => Task::done(Message::MoreMenu).chain(Task::done(
+                        Message::MenuAction(song_menu::Action::ShowDetails),
+                    )),
+                    Ok("artists") => Task::done(Message::MoreMenu).chain(Task::done(
+                        Message::MenuAction(song_menu::Action::ShowArtists),
                     )),
                     Ok(_) => Task::done(Message::MoreMenu),
                     Err(_) => Task::none(),
@@ -1850,6 +1872,42 @@ impl App {
                 }
             }
             Action::Download => self.update_download(downloads::Msg::Start(Box::new(song))),
+            Action::RemoveDownload => {
+                self.update_download(downloads::Msg::RemoveSongs(vec![song.video_id]))
+            }
+            Action::OpenArtist(artist) => {
+                let name = artist.name;
+                Task::perform(self.services.clone().artist_id_by_name(name), |id| {
+                    id.map_or(Message::Noop, |id| Message::Navigate(Route::Artist(id)))
+                })
+            }
+            Action::ShowArtists => {
+                let kinds = song
+                    .artists
+                    .iter()
+                    .filter(|artist| !artist.name.is_empty())
+                    .map(|artist| {
+                        Task::perform(
+                            self.services.clone().artist_kind(artist.name.clone()),
+                            |_| Message::Noop,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                menu.page = song_menu::Page::Artists;
+                self.menu = Some(menu);
+                Task::batch(kinds)
+            }
+            Action::ShowDetails => {
+                menu.page = song_menu::Page::Details(None);
+                self.menu = Some(menu);
+                let id = song.video_id.clone();
+                Task::perform(
+                    self.services
+                        .clone()
+                        .song_details(id.clone(), song.duration),
+                    move |details| Message::MenuDetails(id.clone(), Box::new(details)),
+                )
+            }
             Action::RemoveFromQueue(index) => {
                 self.player.queue.remove(index);
                 Task::none()
@@ -2535,6 +2593,7 @@ impl App {
         if let Some(menu) = &self.menu {
             let context = song_menu::Context {
                 liked: self.liked.contains(&menu.song.video_id),
+                downloaded: self.downloads.saved.contains(&menu.song.video_id),
                 account: matches!(self.session, Session::SignedIn(_)),
                 playing: self
                     .player

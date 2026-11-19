@@ -148,6 +148,27 @@ impl App {
 
     /// Swift `AlbumDetailView`: remembers the album's songs, so its card can
     /// tell when all of them are saved.
+    /// A podcast page loaded: its episodes are remembered, and the new ones
+    /// download when Auto-Download New Episodes is on (Swift `PodcastDetailView.load`).
+    pub(crate) fn podcast_seen(&self, detail: &crate::Detail) -> Task<Message> {
+        let crate::Detail::Podcast { info, .. } = detail else {
+            return Task::none();
+        };
+        let auto = self.settings.prefs.auto_download_new_episodes;
+        Task::perform(
+            self.services
+                .clone()
+                .new_episodes(info.clone(), info.browse_id.clone()),
+            move |songs| {
+                if auto && !songs.is_empty() {
+                    Message::Download(Msg::StartAll(Arc::new(songs)))
+                } else {
+                    Message::Noop
+                }
+            },
+        )
+    }
+
     pub(crate) fn album_seen(&self, detail: &crate::Detail) -> Task<Message> {
         let crate::Detail::Album { info, songs } = detail else {
             return Task::none();

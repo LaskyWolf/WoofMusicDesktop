@@ -126,8 +126,8 @@ Pages and cards [worker: pages]
 
 Downloads and song menu [worker: downloads]
 - [x] Download a whole album or playlist with a progress card; downloaded badges (`DownloadManager` batches, `LibraryDownloadCard`, `DownloadedCollections`)
-- [ ] Downloads More menu, Remove Download(s), Download Settings: storage, quality, auto-download on like, new episodes (`DownloadsMoreSheet`, `DownloadSettingsView`)
-- [ ] Song menu: Similar Songs, Song Details, artist picker for several artists, artist kind label, Added by (`RadioViews`, `ArtistPickerSheet`, `ArtistKindService`)
+- [x] Downloads More menu, Remove Download(s), Download Settings: storage, quality, auto-download on like, new episodes (`DownloadsMoreSheet`, `DownloadSettingsView`)
+- [x] Song menu: Similar Songs, Song Details, artist picker for several artists, artist kind label, Added by (`RadioViews`, `ArtistPickerSheet`, `ArtistKindService`)
 
 Settings and player looks [worker: polish]
 - [x] Last.fm options, Discord options (not the Discord user status), Transition Effects slider, Quick Picks size (the setting; Home reads it), Diagnostics extras (`LastFMSettingsView`, `DiscordSettingsView`, `DiagnosticsView`)

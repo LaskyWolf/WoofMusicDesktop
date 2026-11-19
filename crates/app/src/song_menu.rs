@@ -18,12 +18,16 @@ use iced::{
 use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::sleep_timer::{self, SleepTimer};
 use trop::database::entities::playlist_entity::PlaylistEntity;
-use trop::networking::models::yt_item::SongItem;
+use trop::networking::models::yt_item::{SongItem, YTArtist};
+use trop::services::artist_kind_service;
 use trop::services::personalization_service::{RadioOptions, RadioStyle};
 
+use crate::services::SongDetails;
 use crate::{Message, Route, theme, ui};
 
 const WIDTH: f32 = 232.0;
+/// Song Details lists long values: its panel is wider.
+const DETAILS_WIDTH: f32 = 380.0;
 pub(crate) const ITEM: f32 = 36.0;
 pub(crate) const PAD: f32 = 6.0;
 /// The glass shader's id for the menu panel (1–3 are the sidebar, player bar and queue).
@@ -51,11 +55,19 @@ pub enum Page {
     Speed,
     /// Swift `RadioOptionsSheet`: the options Start Radio uses.
     Radio(RadioOptions),
+    /// Swift `ArtistPickerSheet`: the song's artists, to open one.
+    Artists,
+    /// Swift `SongDetailsView`: `None` while the extras load.
+    Details(Option<Box<SongDetails>>),
+    /// Remove Download asks before deleting the file.
+    ConfirmRemove,
 }
 
 /// What the menu needs from the app to label its items.
 pub struct Context<'a> {
     pub liked: bool,
+    /// The song is saved for offline: Remove Download is offered.
+    pub downloaded: bool,
     /// Like and Add to Playlist need an account.
     pub account: bool,
     /// The menu's song is the one playing: Sleep Timer and Speed apply to it.
@@ -97,6 +109,13 @@ pub enum Action {
     /// Opens the share card studio for the song.
     ShareCard,
     Download,
+    /// Deletes the saved file, after the confirmation page.
+    RemoveDownload,
+    /// Opens an artist; one without an id is looked up by name.
+    OpenArtist(YTArtist),
+    /// Loads the artists' kinds for the picker.
+    ShowArtists,
+    ShowDetails,
     RemoveFromQueue(usize),
     Open(Page),
     /// Starts a countdown of this many minutes, or turns the timer off.
@@ -140,6 +159,17 @@ pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
             items
         }
         Page::NewPlaylist(name) => new_playlist_items(name),
+        Page::Artists => artist_items(&menu.song),
+        Page::Details(details) => detail_items(&menu.song, details.as_deref()),
+        Page::ConfirmRemove => vec![
+            note("Remove this download?"),
+            item(icons::REMOVE, "Remove Download", Action::RemoveDownload),
+            item(icons::BACK, "Cancel", Action::Open(Page::Actions)),
+        ],
+    };
+    let width = match menu.page {
+        Page::Details(_) => DETAILS_WIDTH,
+        _ => WIDTH,
     };
     let rows = items.len() as f32;
     let height = (rows * ITEM + 2.0 * PAD).min(window.height - 2.0 * theme::INSET);
@@ -149,7 +179,7 @@ pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
     let panel = ui::glass_panel(
         GLASS,
         14.0,
-        Length::Fixed(WIDTH),
+        Length::Fixed(width),
         Length::Fixed(height),
         list,
     );
@@ -157,7 +187,7 @@ pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
     let x = menu
         .at
         .x
-        .min(window.width - WIDTH - theme::INSET)
+        .min(window.width - width - theme::INSET)
         .max(theme::INSET);
     let y = if menu.at.y + height > window.height - theme::INSET {
         (menu.at.y - height).max(theme::INSET)
@@ -180,10 +210,20 @@ pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
 
 fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> {
     let song = &menu.song;
-    let mut items = vec![
+    let mut items = Vec::new();
+    // Swift `AddedByMenuItem`; the avatar is not drawn.
+    if let Some(adder) = &song.added_by {
+        let line = if adder.is_owner {
+            format!("Added by {} · Owner", adder.name)
+        } else {
+            format!("Added by {}", adder.name)
+        };
+        items.push(item_note(icons::ARTIST, &line));
+    }
+    items.extend([
         item(icons::PLAY_NEXT, "Play Next", Action::PlayNext),
         item(icons::ADD_QUEUE, "Add to Queue", Action::AddToQueue),
-    ];
+    ]);
     if context.guest {
         items.push(item(
             crate::together::PEOPLE,
@@ -211,14 +251,39 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
             Action::GoTo(Route::Album(id)),
         ));
     }
-    if let Some(id) = song.artists.iter().find_map(|artist| artist.id.clone()) {
-        items.push(item(
+    let named: Vec<&YTArtist> = song
+        .artists
+        .iter()
+        .filter(|artist| !artist.name.is_empty())
+        .collect();
+    // Swift `handleViewArtist`: several artists ask which; one opens, by name when it has no id.
+    match named.as_slice() {
+        [] => {}
+        [artist] => items.push(item(
             icons::ARTIST,
             "Go to Artist",
-            Action::GoTo(Route::Artist(id)),
-        ));
+            match &artist.id {
+                Some(id) => Action::GoTo(Route::Artist(id.clone())),
+                None => Action::OpenArtist((*artist).clone()),
+            },
+        )),
+        _ => items.push(item(icons::ARTIST, "Go to Artist…", Action::ShowArtists)),
     }
-    items.push(item(icons::DOWNLOAD, "Download", Action::Download));
+    items.push(item(
+        icons::SIMILAR,
+        "Similar Songs…",
+        Action::GoTo(Route::Similar(song.video_id.clone())),
+    ));
+    items.push(item(icons::INFO, "Song Details…", Action::ShowDetails));
+    if context.downloaded {
+        items.push(item(
+            icons::REMOVE,
+            "Remove Download",
+            Action::Open(Page::ConfirmRemove),
+        ));
+    } else {
+        items.push(item(icons::DOWNLOAD, "Download", Action::Download));
+    }
     items.push(item(icons::LINK, "Copy Song Link", Action::CopyLink));
     items.push(item(icons::SHARE, "Share Card…", Action::ShareCard));
     if let Some(index) = menu.queue_index {
@@ -246,6 +311,146 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
         items.push(item(icons::SPEED, &speed, Action::Open(Page::Speed)));
     }
     items
+}
+
+/// The artists with their kind from MusicBrainz, once it answered.
+fn artist_items<'a>(song: &SongItem) -> Vec<Element<'a, Message>> {
+    song.artists
+        .iter()
+        .filter(|artist| !artist.name.is_empty())
+        .map(|artist| {
+            let label = match artist_kind_service::cached_kind(&artist.name) {
+                Some(kind) => format!("{} · {kind}", artist.name),
+                None => artist.name.clone(),
+            };
+            let action = match &artist.id {
+                Some(id) => Action::GoTo(Route::Artist(id.clone())),
+                None => Action::OpenArtist(artist.clone()),
+            };
+            item(icons::ARTIST, &label, action)
+        })
+        .collect()
+}
+
+/// A line of text with an icon that does nothing when pressed.
+fn item_note<'a>(icon: &'static [u8], label: &str) -> Element<'a, Message> {
+    container(
+        row![
+            ui::icon(icon, 18.0).style(|_, _| svg::Style {
+                color: Some(theme::SECONDARY)
+            }),
+            text(ui::fit(label, WIDTH - 60.0, 14.0))
+                .size(14)
+                .color(theme::SECONDARY)
+                .wrapping(text::Wrapping::None),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    )
+    .center_y(ITEM)
+    .padding([0, 10])
+    .into()
+}
+
+/// Swift `SongDetailsView`: Track, Stream and Stats.
+fn detail_items<'a>(song: &SongItem, details: Option<&SongDetails>) -> Vec<Element<'a, Message>> {
+    use swiftytube::formatting::count_format::CountFormatInt;
+    use swiftytube::formatting::duration_format::DurationFormatInt;
+
+    let duration = if song.duration > 0 {
+        song.duration
+    } else {
+        details.and_then(|d| d.duration).unwrap_or(0)
+    };
+    let mut rows = vec![heading("Track")];
+    rows.push(detail("Title", &song.title));
+    rows.push(detail("Artists", &song.artist_names_display()));
+    if let Some(album) = &song.album {
+        rows.push(detail("Album", album));
+    }
+    rows.push(detail("Duration", &duration.formatted_duration()));
+    rows.push(detail("Video ID", &song.video_id));
+    rows.push(heading("Stream"));
+    match details {
+        None => rows.push(detail("Status", "Loading…")),
+        Some(details) => {
+            if let Some(stream) = &details.stream {
+                rows.push(detail("Client", &stream.client_name));
+                rows.push(detail("ITAG", &stream.itag.to_string()));
+                rows.push(detail(
+                    "Bitrate",
+                    &format!("{} kbps", stream.bitrate / 1000),
+                ));
+                rows.push(detail(
+                    "Audio quality",
+                    &stream.audio_quality.replace("AUDIO_QUALITY_", ""),
+                ));
+                if let Some(loudness) = stream.loudness_db {
+                    rows.push(detail("Loudness", &format!("{loudness:.1} dB")));
+                }
+                rows.push(detail(
+                    "Expires in",
+                    &format!("{}s", stream.expires_in_seconds),
+                ));
+            } else if let Some(format) = &details.format {
+                rows.push(detail("Source", "Cached format"));
+                rows.push(detail("ITAG", &format.itag.to_string()));
+                rows.push(detail(
+                    "Bitrate",
+                    &format!("{} kbps", format.bitrate / 1000),
+                ));
+                if format.content_length > 0 {
+                    rows.push(detail(
+                        "Size",
+                        &ui::format_bytes(format.content_length as u64),
+                    ));
+                }
+            } else {
+                rows.push(detail("Status", "Not resolved yet"));
+            }
+        }
+    }
+    rows.push(heading("Stats"));
+    rows.push(detail(
+        "Views",
+        &match details {
+            None => "Loading…".to_owned(),
+            Some(details) => details.views.map_or("Unavailable".to_owned(), |views| {
+                views.formatted_views(" views")
+            }),
+        },
+    ));
+    rows
+}
+
+fn heading<'a>(label: &'a str) -> Element<'a, Message> {
+    container(
+        text(label)
+            .size(12)
+            .font(theme::weight(Weight::Bold))
+            .color(theme::SECONDARY),
+    )
+    .center_y(ITEM)
+    .padding([0, 10])
+    .into()
+}
+
+/// A label and its value, the value cut to fit the row.
+fn detail<'a>(label: &'a str, value: &str) -> Element<'a, Message> {
+    let value = if value.is_empty() { "—" } else { value };
+    container(
+        row![
+            text(label).size(14).color(theme::SECONDARY),
+            Space::new().width(Length::Fill),
+            text(ui::fit(value, DETAILS_WIDTH - 140.0, 14.0))
+                .size(14)
+                .wrapping(text::Wrapping::None),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .center_y(ITEM)
+    .padding([0, 10])
+    .into()
 }
 
 /// Swift `SleepTimerSheet`: End of Song, the countdowns, and Off while one runs.
@@ -596,6 +801,9 @@ pub mod icons {
     pub const LINK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></g></svg>"##;
     /// `square.and.arrow.up`.
     pub const SHARE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4M8 11H6v9h12v-9h-2"/></g></svg>"##;
+    pub const SIMILAR: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9zM19 16.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>"##;
+    pub const INFO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.2"/></g></svg>"##;
+    pub const BACK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.5 5.5L8 12l6.5 6.5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     pub const REMOVE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/></g></svg>"##;
     pub const MORE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="#fff"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></g></svg>"##;
     pub const SHUFFLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H21M3 17h3.5c1.4 0 2.4-.5 3.2-1.4M13.3 8.4C14.1 7.5 15.1 7 16.5 7H21M18 4l3 3-3 3M18 14l3 3-3 3"/></g></svg>"##;

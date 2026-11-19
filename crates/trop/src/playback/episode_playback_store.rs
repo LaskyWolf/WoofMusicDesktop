@@ -110,3 +110,31 @@ impl EpisodePlaybackStore {
         self.positions.remove(video_id).is_some()
     }
 }
+
+/// Swift `EpisodePlaybackStore.syncKnownEpisodes`: remembers the episodes of
+/// a podcast page and returns the ones never seen before.
+pub fn sync_known_episodes(
+    db: &crate::database::database_service::DatabaseService,
+    episodes: &[crate::networking::models::yt_item::EpisodeItem],
+    podcast_id: &str,
+    podcast_name: &str,
+) -> rusqlite::Result<Vec<crate::networking::models::yt_item::EpisodeItem>> {
+    use crate::database::entities::episode_entity::EpisodeEntity;
+    let mut fresh = Vec::new();
+    for episode in episodes {
+        if db.fetch_one::<EpisodeEntity>(&episode.video_id)?.is_some() {
+            continue;
+        }
+        db.insert_or_replace(&EpisodeEntity {
+            id: episode.video_id.clone(),
+            title: episode.title.clone(),
+            duration: episode.duration,
+            thumbnail_url: episode.thumbnail_url.clone(),
+            podcast_id: Some(podcast_id.to_owned()),
+            podcast_name: Some(podcast_name.to_owned()),
+            is_played: false,
+        })?;
+        fresh.push(episode.clone());
+    }
+    Ok(fresh)
+}

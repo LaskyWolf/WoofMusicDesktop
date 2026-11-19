@@ -28,6 +28,7 @@ use trop::audio::lyrics::romanizer::lyrics_romanizer::LyricsRomanizer;
 use trop::audio::player_controller::player_controller::PlayerController;
 use trop::audio::sponsor_block::{self, Segment};
 use trop::database::database_service::DatabaseService;
+use trop::database::entities::format_entity::FormatEntity;
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::database::entities::song_entity::SongEntity;
 use trop::detail::album_detail_parser::AlbumDetailParser;
@@ -45,6 +46,8 @@ use trop::playback::youtube_history_report::YouTubeHistoryReport;
 use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::search::search_view_model;
+
+use trop::services::artist_kind_service;
 use trop::services::comments_service::CommentsService;
 use trop::services::download_manager::{DownloadManager, Resolved};
 use trop::services::downloaded_collections::DownloadedCollections;
@@ -67,6 +70,15 @@ pub enum LinkTarget {
     Route(Route),
     /// A radio that starts on the linked song.
     Play(Arc<Vec<SongItem>>, usize),
+}
+
+/// What the Song Details page adds to the song row.
+#[derive(Clone, Debug, Default)]
+pub struct SongDetails {
+    pub duration: Option<i64>,
+    pub stream: Option<swiftytube::streaming::playback_result::PlaybackResult>,
+    pub format: Option<FormatEntity>,
+    pub views: Option<i64>,
 }
 
 pub struct Services {
@@ -371,6 +383,16 @@ impl Services {
                 .map_err(|error| error.to_string())?;
                 Ok(Detail::Songs(Arc::new(
                     songs.iter().map(song_item).collect(),
+                )))
+            }
+            Route::Similar(id) => {
+                let options = RadioOptions::default();
+                let (songs, _) = personalization_service::fetch_radio(client, &id, options).await?;
+                Ok(Detail::Songs(Arc::new(
+                    songs
+                        .into_iter()
+                        .filter(|song| song.video_id != id)
+                        .collect(),
                 )))
             }
             Route::Downloads => {
@@ -739,6 +761,87 @@ impl Services {
         result.map_err(|error| error.to_string())?;
         crate::integrations::love(&song, liked);
         Ok(())
+    }
+
+    /// Song Details' extras: the duration when the row lacks it, the stream
+    /// in use, the saved format and the view count.
+    pub async fn song_details(self: Arc<Self>, video_id: String, duration: i64) -> SongDetails {
+        let client = self.client.clone();
+        let resolved = if duration > 0 {
+            None
+        } else {
+            client.resolve_duration(&video_id).await
+        };
+        let id = video_id.clone();
+        let this = self.clone();
+        let format = blocking(move || this.db.fetch_one::<FormatEntity>(id))
+            .await
+            .and_then(Result::ok)
+            .flatten();
+        let views = client
+            .player_response::<swiftytube::streaming::player_response::PlayerResponse>(
+                swiftytube::networking::inner_tube_client::PlayerArgs {
+                    video_id: video_id.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok()
+            .and_then(|response| response.video_details?.view_count?.parse().ok());
+        SongDetails {
+            duration: resolved,
+            stream: StreamCache::shared().get(&video_id),
+            format,
+            views,
+        }
+    }
+
+    /// The artist page of the first search hit named `name`, the exact name first.
+    pub async fn artist_id_by_name(self: Arc<Self>, name: String) -> Option<String> {
+        let wanted = name.trim().to_lowercase();
+        let sections = self.clone().search(name).await.ok()?;
+        let artists: Vec<_> = sections
+            .iter()
+            .flat_map(|section| &section.items)
+            .filter_map(|item| match item {
+                YTItem::Artist(artist) => Some(artist),
+                _ => None,
+            })
+            .collect();
+        artists
+            .iter()
+            .find(|artist| artist.name.trim().to_lowercase() == wanted)
+            .or(artists.first())
+            .map(|artist| artist.browse_id.clone())
+    }
+
+    /// MusicBrainz's word for the act ("Band", "Rapper"…), cached.
+    pub async fn artist_kind(self: Arc<Self>, name: String) -> Option<String> {
+        artist_kind_service::kind(&self.http, &name).await
+    }
+
+    /// A podcast page was read: remembers its episodes and, with Auto-Download
+    /// New Episodes on, returns the newest ten never seen before.
+    pub async fn new_episodes(
+        self: Arc<Self>,
+        info: trop::detail::detail_models::PodcastDetailInfo,
+        browse_id: String,
+    ) -> Vec<SongItem> {
+        blocking(move || {
+            trop::playback::episode_playback_store::sync_known_episodes(
+                &self.db,
+                &info.episodes,
+                &browse_id,
+                &info.title,
+            )
+        })
+        .await
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .iter()
+        .take(10)
+        .map(crate::ui::episode_song)
+        .collect()
     }
 
     /// A queue of songs like `video_id`, and its index in it.
