@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WoofMusic
+Comment=Play YouTube Music with your Google account
+Exec=woofmusic
+Icon=woofmusic
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=com.laskywolf.woofmusic

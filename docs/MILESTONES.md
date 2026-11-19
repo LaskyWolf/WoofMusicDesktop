@@ -96,12 +96,12 @@ Done when: every WoofMusic iOS feature above works on desktop.
 ## R7: Window background
 
 - [x] Blur behind the window: `ext-background-effect-v1` on Wayland (KWin 6.8 no longer lists its own blur), Mica on Windows 11 (not yet run on Windows), black elsewhere
-- [ ] Opaque fallback elsewhere
+- [x] Opaque fallback elsewhere
 
 ## R8: Packages
 
-- [ ] libmpv on Windows: download an mpv-dev build in CI and make `mpv.lib` for MSVC (the Windows CI job fails to link until then)
-- [ ] AppImage for Linux, installer for Windows, built by CI on `v*` tags
-- [ ] README install steps
+- [x] libmpv on Windows: `packaging/windows/libmpv.ps1` downloads an mpv-dev build in CI and makes `mpv.lib` for MSVC (not yet run: no CI run since)
+- [x] AppImage for Linux, installer for Windows, built by CI on `v*` tags (not yet run)
+- [x] README install steps
 
 Done when: a `v*` tag publishes both packages and they install on a clean system.

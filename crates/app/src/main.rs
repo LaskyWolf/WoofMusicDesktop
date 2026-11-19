@@ -1,4 +1,6 @@
 //! WoofMusic Desktop: window, navigation, player and queue (see docs/MILESTONES.md).
+// No console window behind the app on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod backdrop;
 mod comments;
