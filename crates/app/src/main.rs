@@ -446,7 +446,7 @@ pub enum Message {
     /// A filter chip: shows only that section, or everything again.
     LibraryFilter(LibraryFilter),
     /// YouTube's Home page is in, or failed with nothing to show.
-    HomeLoaded(Result<services::HomeFeed, String>),
+    HomeLoaded(u64, Result<services::HomeFeed, String>),
     Home(home::Msg),
     ExploreLoaded(Result<Vec<ExploreSection>, String>),
     DetailLoaded(String, Result<Arc<Detail>, String>),
@@ -1120,7 +1120,8 @@ impl App {
                 self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
                 scroll_page_to(0.0)
             }
-            Message::HomeLoaded(Ok(feed)) => {
+            Message::HomeLoaded(load, _) if load != self.services.home_generation() => Task::none(),
+            Message::HomeLoaded(_, Ok(feed)) => {
                 // Dev aid: WOOF_PLAY=1 plays the first Home section with songs
                 // (with WOOF_SEARCH, the first songs found instead).
                 let autoplay = dev_autoplay(false).then(|| {
@@ -1135,7 +1136,7 @@ impl App {
                     None => covers,
                 }
             }
-            Message::HomeLoaded(Err(error)) => {
+            Message::HomeLoaded(_, Err(error)) => {
                 // A failed reload keeps the page on screen (the saved one at launch).
                 if !matches!(self.home.feed, Load::Loaded(_)) {
                     self.home.feed = Load::Failed(error);
@@ -3858,6 +3859,91 @@ mod tests {
         let _ = app.update(Message::Previous);
         let _ = app.update(Message::Next);
         assert_eq!(app.player.queue.index, 0);
+    }
+
+    fn account_feed() -> services::HomeFeed {
+        services::HomeFeed {
+            has_page: true,
+            has_more: true,
+            ..services::HomeFeed::default()
+        }
+    }
+
+    #[test]
+    fn home_answers_from_before_a_sign_out_are_dropped() {
+        let mut app = app();
+        let old = app.services.home_generation();
+        let _ = app.update(Message::SignOut);
+        let _ = app.update(Message::SessionReady(false));
+        assert!(matches!(app.home.feed, Load::Loading));
+        let _ = app.update(Message::Home(home::Msg::Updated(old, account_feed())));
+        let _ = app.update(Message::HomeLoaded(old, Ok(account_feed())));
+        assert!(matches!(app.home.feed, Load::Loading));
+        let _ = app.update(Message::HomeLoaded(
+            app.services.home_generation(),
+            Ok(account_feed()),
+        ));
+        assert!(matches!(app.home.feed, Load::Loaded(_)));
+    }
+
+    #[tokio::test]
+    async fn rapid_pins_and_unpins_end_in_the_last_state() {
+        let mut app = app();
+        let pinned = song("p");
+        for i in 0..20 {
+            let _ = app.pin(pinned.clone(), i % 2 == 0);
+        }
+        // The 20th call unpinned it.
+        assert!(app.home.pins.is_empty());
+        let _ = app.pin(pinned.clone(), true);
+        let _ = app.pin(pinned.clone(), true);
+        // Pins are stamped to the millisecond.
+        std::thread::sleep(Duration::from_millis(3));
+        let _ = app.pin(song("q"), true);
+        assert_eq!(
+            app.home
+                .pins
+                .iter()
+                .map(|s| &*s.video_id)
+                .collect::<Vec<_>>(),
+            ["q", "p"]
+        );
+        let _ = app.pin(pinned, false);
+        let _ = app.pin(song("never-pinned"), false);
+        assert_eq!(app.home.pins.len(), 1);
+    }
+
+    #[test]
+    fn a_mix_radio_for_a_replaced_queue_adds_nothing_and_empty_mixes_do_not_play() {
+        let mut app = app();
+        let _ = app.update(Message::Home(home::Msg::PlayMix(0)));
+        assert!(app.player.queue.songs.is_empty());
+        play(&mut app, "A");
+        let _ = app.update(Message::Home(home::Msg::MixRadio(
+            "gone".into(),
+            Ok((vec![song("R")], 0)),
+        )));
+        assert_eq!(app.player.queue.songs.len(), 1);
+        let _ = app.update(Message::Home(home::Msg::MixRadio(
+            "A".into(),
+            Ok((vec![song("A"), song("R"), song("R")], 0)),
+        )));
+        let ids: Vec<_> = app
+            .player
+            .queue
+            .songs
+            .iter()
+            .map(|s| &*s.video_id)
+            .collect();
+        assert_eq!(ids, ["A", "R"]);
+    }
+
+    #[tokio::test]
+    async fn a_show_without_episodes_says_so_and_plays_nothing() {
+        let mut app = app();
+        let _ = app.update(Message::Home(home::Msg::ShowLoaded(Ok(Arc::default()))));
+        assert!(app.player.queue.songs.is_empty());
+        assert!(app.notice.is_some());
     }
 
     #[test]

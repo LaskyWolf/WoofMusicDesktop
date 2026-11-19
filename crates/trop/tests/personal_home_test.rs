@@ -210,3 +210,120 @@ async fn the_last_page_shows_until_the_new_one_loads() {
     assert!(!next.show_saved_home());
     SavedHome::clear(&path);
 }
+
+#[test]
+fn an_empty_library_builds_no_sections_and_no_mixes() {
+    let db = DatabaseService::open_in_memory();
+    assert!(
+        personalization::build_quick_picks(&db, 18)
+            .items()
+            .is_empty()
+    );
+    assert!(
+        personalization::build_keep_listening(&db)
+            .items()
+            .is_empty()
+    );
+    assert!(
+        personalization::build_forgotten_favorites(&db)
+            .items()
+            .is_empty()
+    );
+    assert!(mixes::build(&db, SystemTime::now()).is_empty());
+    let mut home = HomeViewModel::new(fixture_client(|_| "home").0);
+    home.load_local_sections(&db, 18);
+    assert!(home.local_sections.is_empty() && home.mixes.is_empty());
+}
+
+#[test]
+fn one_play_gives_keep_listening_and_no_mix() {
+    let db = DatabaseService::open_in_memory();
+    db.save(&song("a", "Solo", false, 5000)).unwrap();
+    play(&db, "a", 1);
+    assert_eq!(ids(&personalization::build_keep_listening(&db)), ["a"]);
+    assert!(mixes::build(&db, SystemTime::now()).is_empty());
+}
+
+#[test]
+fn songs_without_an_artist_or_title_do_not_break_the_mixes() {
+    let db = DatabaseService::open_in_memory();
+    for i in 0..8 {
+        let mut s = song(&format!("n{i}"), "x", true, 100 + i);
+        s.artist_name = None;
+        s.thumbnail_url = None;
+        if i == 0 {
+            s.title = String::new();
+        }
+        db.save(&s).unwrap();
+    }
+    let built = mixes::build(&db, SystemTime::now());
+    let flow = built.iter().find(|m| m.kind == MixKind::Flow).unwrap();
+    assert_eq!(flow.songs.len(), 7);
+    assert!(built.iter().all(|m| m.kind != MixKind::Artist));
+}
+
+#[test]
+fn a_mix_lists_each_song_once_and_never_more_than_thirty() {
+    let db = DatabaseService::open_in_memory();
+    // Liked and most played at once: it must not show twice.
+    for i in 0..45 {
+        db.save(&song(&format!("s{i}"), "Same Name", true, 1000 + i))
+            .unwrap();
+    }
+    let built = mixes::build(&db, SystemTime::now());
+    for mix in &built {
+        let unique: std::collections::HashSet<_> = mix.songs.iter().map(|s| &s.video_id).collect();
+        assert_eq!(unique.len(), mix.songs.len(), "{}", mix.id);
+        assert!(mix.songs.len() <= 30);
+    }
+    assert_eq!(
+        built.iter().filter(|m| m.kind == MixKind::Artist).count(),
+        1
+    );
+}
+
+#[test]
+fn a_corrupt_or_missing_saved_page_shows_nothing() {
+    let dir = std::env::temp_dir().join(format!("woof-home-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let client = fixture_client(|_| "home").0;
+    for (name, bytes) in [
+        ("empty", &b""[..]),
+        ("garbage", b"\x00\xff not json"),
+        ("array", b"[1,2,3]"),
+        ("object", b"{}"),
+        ("truncated", b"{\"contents\":{\"singleColumn"),
+    ] {
+        let path = dir.join(format!("{name}.json"));
+        std::fs::write(&path, bytes).unwrap();
+        let mut home = HomeViewModel::new(client.clone());
+        home.saved_home = Some(path);
+        assert!(!home.show_saved_home(), "{name}");
+        assert!(home.home_page.is_none(), "{name}");
+    }
+    let mut home = HomeViewModel::new(client);
+    home.saved_home = Some(dir.join("missing.json"));
+    assert!(!home.show_saved_home());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_huge_history_still_builds_the_sections() {
+    let db = DatabaseService::open_in_memory();
+    for i in 0..3000 {
+        db.save(&song(
+            &format!("h{i}"),
+            &format!("Artist {}", i % 7),
+            i % 3 == 0,
+            i,
+        ))
+        .unwrap();
+        if i % 2 == 0 {
+            play(&db, &format!("h{i}"), (i % 400) as u32);
+        }
+    }
+    let mut home = HomeViewModel::new(fixture_client(|_| "home").0);
+    home.load_local_sections(&db, 18);
+    assert!(home.local_sections.iter().all(|s| s.items().len() <= 18));
+    assert!(home.mixes.iter().all(|m| m.songs.len() <= 30));
+}

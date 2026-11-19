@@ -101,6 +101,8 @@ pub struct Services {
     settings: std::sync::RwLock<SettingsStore>,
     /// Home's pages and sections; one load, chip or next page at a time.
     home: tokio::sync::Mutex<HomeViewModel>,
+    /// Counts the Home loads started; an answer from an older one is stale.
+    home_loads: std::sync::atomic::AtomicU64,
 }
 
 fn home_model(client: &Arc<InnerTubeClient>) -> tokio::sync::Mutex<HomeViewModel> {
@@ -166,6 +168,7 @@ impl Services {
             )),
             comments: Arc::new(CommentsService::new(client.clone())),
             home: home_model(&client),
+            home_loads: Default::default(),
             client,
             player,
             db,
@@ -283,6 +286,18 @@ impl Services {
     }
 
     // MARK: - Home (Swift `HomeViewModel.load`)
+
+    /// The newest Home load's number.
+    pub fn home_generation(&self) -> u64 {
+        self.home_loads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Starts a Home load: answers numbered lower are stale.
+    pub fn start_home_load(&self) -> u64 {
+        self.home_loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
 
     /// The sections from the library, and the page saved at the last launch
     /// when there is one (`has_page`).
@@ -1510,6 +1525,7 @@ impl Services {
             )),
             comments: Arc::new(CommentsService::new(client.clone())),
             home: tokio::sync::Mutex::new(HomeViewModel::new(client.clone())),
+            home_loads: Default::default(),
             client,
             player: None,
             db,

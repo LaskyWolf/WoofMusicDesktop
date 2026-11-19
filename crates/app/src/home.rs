@@ -53,7 +53,8 @@ impl Default for Home {
 pub enum Msg {
     /// The library's sections and saved page, the account's sections, a
     /// chip's feed or the next page.
-    Updated(HomeFeed),
+    /// Numbered by the load that asked; an answer from an older load is dropped.
+    Updated(u64, HomeFeed),
     Chip(HomePageChip),
     Scrolled(scrollable::Viewport),
     ToggleKeepListening,
@@ -70,11 +71,12 @@ pub enum Msg {
 /// Swift `HomeViewModel.load`: the library's sections and the saved page
 /// first, then YouTube's page; the account's sections alongside.
 pub fn load(services: &Arc<Services>) -> Task<Message> {
-    let updated = |feed| Message::Home(Msg::Updated(feed));
+    let load = services.start_home_load();
+    let updated = move |feed| Message::Home(Msg::Updated(load, feed));
     Task::batch([
         Task::perform(services.clone().home_start(), updated).chain(Task::perform(
             services.clone().home_fetch(),
-            Message::HomeLoaded,
+            move |result| Message::HomeLoaded(load, result),
         )),
         Task::perform(services.clone().home_phase2(), updated),
     ])
@@ -83,7 +85,8 @@ pub fn load(services: &Arc<Services>) -> Task<Message> {
 impl App {
     pub(crate) fn update_home(&mut self, msg: Msg) -> Task<Message> {
         match msg {
-            Msg::Updated(feed) => {
+            Msg::Updated(load, _) if load != self.services.home_generation() => Task::none(),
+            Msg::Updated(_, feed) => {
                 // Until YouTube's page or the saved one is in, the placeholders stay.
                 if !feed.has_page && !matches!(self.home.feed, Load::Loaded(_)) {
                     return Task::none();
@@ -96,8 +99,9 @@ impl App {
                     feed.chip = (!closing).then(|| chip.title.clone());
                     feed.chip_loading = !closing;
                 }
-                Task::perform(self.services.clone().home_chip(Some(chip)), |feed| {
-                    Message::Home(Msg::Updated(feed))
+                let load = self.services.home_generation();
+                Task::perform(self.services.clone().home_chip(Some(chip)), move |feed| {
+                    Message::Home(Msg::Updated(load, feed))
                 })
             }
             Msg::Scrolled(viewport) => {
@@ -116,8 +120,9 @@ impl App {
                     return Task::none();
                 }
                 feed.loading_more = true;
-                Task::perform(self.services.clone().home_more(), |feed| {
-                    Message::Home(Msg::Updated(feed))
+                let load = self.services.home_generation();
+                Task::perform(self.services.clone().home_more(), move |feed| {
+                    Message::Home(Msg::Updated(load, feed))
                 })
             }
             Msg::ToggleKeepListening => {
@@ -154,10 +159,10 @@ impl App {
                 if !queue.iter().any(|song| song.video_id == seed) {
                     return Task::none();
                 }
-                let known: HashSet<&str> = queue.iter().map(|s| s.video_id.as_str()).collect();
+                let mut known: HashSet<String> = queue.iter().map(|s| s.video_id.clone()).collect();
                 let more: Vec<SongItem> = songs
                     .into_iter()
-                    .filter(|song| !known.contains(song.video_id.as_str()))
+                    .filter(|song| known.insert(song.video_id.clone()))
                     .collect();
                 self.player.queue.append(&more);
                 Task::none()
