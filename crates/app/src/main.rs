@@ -681,6 +681,7 @@ impl App {
                 .then(move |_| scroll_page_to(offset)),
             None => Task::none(),
         };
+        let stats = app.settings.stats(&services);
         (
             app,
             Task::batch([
@@ -694,6 +695,7 @@ impl App {
                 media_controls::attach(),
                 saved,
                 settings::load(),
+                stats,
                 profile::dev_open(),
                 backdrop::apply(),
             ]),
@@ -1073,7 +1075,7 @@ impl App {
                     }
                     _ => Task::none(),
                 };
-                Task::batch([library, self.load_likes()])
+                Task::batch([library, self.load_likes(), self.refresh_collections()])
             }
             Message::LibraryFilter(filter) => {
                 self.library_filter = (self.library_filter != Some(filter)).then_some(filter);
@@ -1113,12 +1115,15 @@ impl App {
                 covers
             }
             Message::DetailLoaded(key, result) => {
-                let covers = match &result {
-                    Ok(detail) => self.fetch_covers(detail.cover_urls()),
-                    Err(_) => Task::none(),
+                let (covers, album) = match &result {
+                    Ok(detail) => (
+                        self.fetch_covers(detail.cover_urls()),
+                        self.album_seen(detail),
+                    ),
+                    Err(_) => (Task::none(), Task::none()),
                 };
                 self.details.insert(key, loaded(result));
-                covers
+                Task::batch([covers, album])
             }
             Message::SearchInput(query) => {
                 self.query = query;
@@ -1613,7 +1618,7 @@ impl App {
             }
             Route::Library => Task::none(),
             Route::Search => focus(pages::SEARCH_INPUT),
-            Route::Settings => settings::load(),
+            Route::Settings => Task::batch([settings::load(), self.settings.stats(&self.services)]),
             Route::Equalizer => Task::none(),
             Route::Profile => {
                 let cx = self.profile_cx();
@@ -1901,10 +1906,18 @@ impl App {
             self.liked.remove(&song.video_id);
         }
         let song = Box::new(song);
-        Task::perform(
-            self.services.clone().set_liked((*song).clone(), liked),
-            move |result| Message::Liked(song, liked, result),
-        )
+        let like = Task::perform(self.services.clone().set_liked((*song).clone(), liked), {
+            let song = song.clone();
+            move |result| Message::Liked(song, liked, result)
+        });
+        if liked && self.settings.prefs.auto_download_on_like {
+            Task::batch([
+                like,
+                Task::done(Message::Download(downloads::Msg::Start(song))),
+            ])
+        } else {
+            like
+        }
     }
 
     fn load_likes(&self) -> Task<Message> {

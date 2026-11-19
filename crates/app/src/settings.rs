@@ -33,16 +33,18 @@ pub enum Tab {
     Player,
     Content,
     Lyrics,
+    Downloads,
     Integrations,
     Diagnostics,
 }
 
 impl Tab {
-    const ALL: [(Tab, &'static str); 6] = [
+    const ALL: [(Tab, &'static str); 7] = [
         (Tab::Appearance, "Appearance"),
         (Tab::Player, "Player"),
         (Tab::Content, "Content"),
         (Tab::Lyrics, "Lyrics"),
+        (Tab::Downloads, "Downloads"),
         (Tab::Integrations, "Integrations"),
         (Tab::Diagnostics, "Diagnostics"),
     ];
@@ -70,11 +72,15 @@ pub struct State {
     copied: Option<String>,
     /// Warnings and errors of the log, read when Diagnostics opens.
     problems: Vec<String>,
+
+    /// Bytes used and saved songs, read when the Downloads tab opens.
+    download_stats: Option<(u64, usize)>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Tab(Tab),
+    DownloadStats((u64, usize)),
     /// A setting changed: saved, and handed to the services that read it.
     Change(SettingsStore),
     CopyReport(String),
@@ -201,6 +207,8 @@ impl State {
             } else {
                 Vec::new()
             },
+
+            download_stats: None,
         }
     }
 
@@ -245,6 +253,12 @@ impl State {
             .is_some_and(|status| status.share_links)
     }
 
+    pub fn stats(&self, services: &Arc<Services>) -> Task<crate::Message> {
+        Task::perform(services.clone().download_stats(), |stats| {
+            crate::Message::Settings(Message::DownloadStats(stats))
+        })
+    }
+
     pub fn update(&mut self, message: Message, services: &Arc<Services>) -> Task<crate::Message> {
         match message {
             Message::Tab(tab) => {
@@ -253,6 +267,13 @@ impl State {
                     self.problems = crate::problems::recent();
                 }
                 self.report_copied = false;
+                if tab == Tab::Downloads {
+                    return self.stats(services);
+                }
+                Task::none()
+            }
+            Message::DownloadStats(stats) => {
+                self.download_stats = Some(stats);
                 Task::none()
             }
             Message::Change(prefs) => self.change(prefs, services),
@@ -260,7 +281,7 @@ impl State {
                 self.report_copied = true;
                 iced::clipboard::write(report)
             }
-            Message::Load => load(),
+            Message::Load => Task::batch([load(), self.stats(services)]),
             Message::Loaded(result) => {
                 match result {
                     Ok(status) => {
@@ -423,6 +444,7 @@ impl State {
             Tab::Player => self.player(transitions, skip_non_music),
             Tab::Content => self.content(),
             Tab::Lyrics => self.lyrics(),
+            Tab::Downloads => self.downloads(),
             Tab::Integrations => self.integrations(),
             Tab::Diagnostics => self.diagnostics(services, session),
         };
@@ -721,6 +743,61 @@ impl State {
                     toggle_row("Sync Liked Songs", prefs.sync_songs, |p, on| {
                         p.sync_songs = on
                     }),
+                ]),
+            ),
+        ])
+    }
+
+    /// Swift `DownloadSettingsView`. Wi-Fi Only is not ported: the desktop
+    /// has no metered-connection switch.
+    fn downloads(&self) -> Element<'_, crate::Message> {
+        let prefs = &self.prefs;
+        let storage = match self.download_stats {
+            Some((bytes, count)) => format!(
+                "{} used · {count} offline track{}",
+                ui::format_bytes(bytes),
+                if count == 1 { "" } else { "s" }
+            ),
+            None => "Calculating…".to_owned(),
+        };
+        sections(vec![
+            (
+                "Storage",
+                "",
+                group(vec![plain("Downloads", text(storage).size(14).into())]),
+            ),
+            (
+                "Quality",
+                "Auto picks the best the song offers. Standard uses less space.",
+                group(vec![plain(
+                    "Download Quality",
+                    segmented(trop::settings::settings_store::DOWNLOAD_QUALITIES.map(
+                        |(quality, name)| {
+                            (
+                                name,
+                                prefs.download_quality == quality,
+                                self.set(|p| p.download_quality = quality),
+                            )
+                        },
+                    )),
+                )]),
+            ),
+            (
+                "Automatic Downloads",
+                "",
+                group(vec![
+                    plain(
+                        "Auto-Download on Like",
+                        self.toggle(prefs.auto_download_on_like, |p, on| {
+                            p.auto_download_on_like = on
+                        }),
+                    ),
+                    plain(
+                        "Auto-Download New Episodes",
+                        self.toggle(prefs.auto_download_new_episodes, |p, on| {
+                            p.auto_download_new_episodes = on
+                        }),
+                    ),
                 ]),
             ),
         ])

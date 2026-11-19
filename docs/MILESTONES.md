@@ -125,7 +125,7 @@ Pages and cards [worker: pages]
 - [x] 2x2 cover mosaic for playlists without a cover (`ArtworkMosaicView`); podcast resume card, episode status tags, expandable description (`PodcastDetailView`)
 
 Downloads and song menu [worker: downloads]
-- [ ] Download a whole album or playlist with a progress card; downloaded badges (`DownloadManager` batches, `LibraryDownloadCard`, `DownloadedCollections`)
+- [x] Download a whole album or playlist with a progress card; downloaded badges (`DownloadManager` batches, `LibraryDownloadCard`, `DownloadedCollections`)
 - [ ] Downloads More menu, Remove Download(s), Download Settings: storage, quality, auto-download on like, new episodes (`DownloadsMoreSheet`, `DownloadSettingsView`)
 - [ ] Song menu: Similar Songs, Song Details, artist picker for several artists, artist kind label, Added by (`RadioViews`, `ArtistPickerSheet`, `ArtistKindService`)
 

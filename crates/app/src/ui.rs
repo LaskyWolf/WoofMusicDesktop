@@ -150,15 +150,35 @@ pub fn tile<'a>(
             .font(theme::weight(Weight::Medium))
             .color(title_color(playing))
             .wrapping(text::Wrapping::None),
-        text(fit(&subtitle, TILE, 13.0))
-            .size(13)
-            .color(theme::SECONDARY)
-            .wrapping(text::Wrapping::None),
+        // A fully saved album or playlist shows Swift's `DownloadedGlyph` after the subtitle.
+        row![
+            text(fit(&subtitle, TILE - 24.0, 13.0))
+                .size(13)
+                .color(theme::SECONDARY)
+                .wrapping(text::Wrapping::None),
+            Space::new().width(Length::Fill),
+            downloaded_glyph(item),
+        ],
     ]
     .spacing(4)
     .width(TILE)
     .clip(true);
     song_menu(item, clickable(content, open(item, songs), 6.0))
+}
+
+fn downloaded_glyph<'a>(item: &YTItem) -> Element<'a, Message> {
+    if !matches!(item, YTItem::Album(_) | YTItem::Playlist(_))
+        || !crate::downloads::is_complete(item.id())
+    {
+        return Space::new().into();
+    }
+    svg(svg::Handle::from_memory(crate::downloads::icons::DOWNLOAD))
+        .width(14)
+        .height(14)
+        .style(|_, _| svg::Style {
+            color: Some(theme::accent()),
+        })
+        .into()
 }
 
 /// Song in a songs-only section (Quick picks): a compact cell.
@@ -607,4 +627,32 @@ pub fn wash<'a>() -> Element<'a, Message> {
             ..container::Style::default()
         })
         .into()
+}
+
+/// A size for people: `12.5 MB`, decimal units like the Swift `ByteCountFormatter`.
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1000.0;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+#[cfg(test)]
+mod format_bytes_tests {
+    use super::format_bytes;
+
+    #[test]
+    fn sizes_use_decimal_units() {
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(999), "999 bytes");
+        assert_eq!(format_bytes(12_500_000), "12.5 MB");
+        assert_eq!(format_bytes(3_200_000_000), "3.2 GB");
+    }
 }

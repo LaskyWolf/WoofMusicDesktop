@@ -11,6 +11,8 @@ pub const TEXT: Color = Color::WHITE;
 pub const SECONDARY: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.70);
 pub const HOVER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 pub const PRESSED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
+/// Orange: a download run that finished with failures.
+pub const WARNING: Color = rgb(0xFF, 0x95, 0x00);
 pub const CLOSE: Color = rgb(0xE5, 0x48, 0x4D);
 pub const CLOSE_PRESSED: Color = rgb(0xC4, 0x36, 0x3B);
 /// Swift `AccentPreset.all`, with WoofMusic teal as the default in place of

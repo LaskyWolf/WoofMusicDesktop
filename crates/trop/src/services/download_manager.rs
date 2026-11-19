@@ -4,7 +4,7 @@
 //! `.webm` for Opus) over plain HTTP, without ffmpeg. mpv plays both, so
 //! there is no transcode, no embedded cover and no AVFoundation check.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -62,7 +62,47 @@ struct Inner {
     /// whose token is gone or replaced stops at its next check.
     tokens: HashMap<String, u64>,
     next_token: u64,
+    /// The songs of the current download run, finished ones included.
+    batch: HashSet<String>,
+    /// The songs of `batch` that were saved.
+    batch_done: HashSet<String>,
 }
+
+impl Inner {
+    /// A download started with nothing running begins a new run.
+    fn join_batch<'a>(&mut self, ids: impl IntoIterator<Item = &'a String>) {
+        let running = self
+            .downloads
+            .values()
+            .any(|d| matches!(d.state, DownloadState::Downloading(_)));
+        if !running {
+            self.batch.clear();
+            self.batch_done.clear();
+        }
+        self.batch.extend(ids.into_iter().cloned());
+    }
+}
+
+/// Swift `DownloadManager.BatchProgress`: how a run of several songs is going.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BatchProgress {
+    pub total: usize,
+    pub completed: usize,
+    pub failed: usize,
+    /// 0...1, counting the progress of the songs still downloading.
+    pub fraction: f64,
+    /// Why the first failed song failed.
+    pub failure_reason: Option<String>,
+}
+
+impl BatchProgress {
+    pub fn is_done(&self) -> bool {
+        self.completed + self.failed == self.total
+    }
+}
+
+/// Below this a song's own row shows enough.
+const MINIMUM_BATCH_SIZE: usize = 2;
 
 /// Why a run stopped early.
 enum Stop {
@@ -225,6 +265,51 @@ impl DownloadManager {
         downloads
     }
 
+    // MARK: - Batch
+
+    /// Swift `download(songs:)`, first half: a whole page's songs count in the
+    /// same run. The caller then starts `download` for each song.
+    pub fn join_batch(&self, ids: &[String]) {
+        self.inner().join_batch(ids);
+    }
+
+    /// `None` when no run of several songs is on, or its result was closed.
+    pub fn batch_progress(&self) -> Option<BatchProgress> {
+        let inner = self.inner();
+        let mut batch = BatchProgress::default();
+        let mut downloading = 0.0;
+        for id in &inner.batch {
+            match inner.downloads.get(id).map(|d| &d.state) {
+                Some(DownloadState::Downloading(progress)) => {
+                    batch.total += 1;
+                    downloading += progress;
+                }
+                Some(DownloadState::Failed(reason)) => {
+                    batch.total += 1;
+                    batch.failed += 1;
+                    batch.failure_reason.get_or_insert_with(|| reason.clone());
+                }
+                None if inner.batch_done.contains(id) => {
+                    batch.total += 1;
+                    batch.completed += 1;
+                }
+                None => {}
+            }
+        }
+        if batch.total < MINIMUM_BATCH_SIZE {
+            return None;
+        }
+        batch.fraction =
+            ((batch.completed + batch.failed) as f64 + downloading) / batch.total as f64;
+        Some(batch)
+    }
+
+    pub fn clear_finished_batch(&self) {
+        let mut inner = self.inner();
+        inner.batch.clear();
+        inner.batch_done.clear();
+    }
+
     // MARK: - Download
 
     /// Saves `song`. `resolve` gives the stream to save.
@@ -242,6 +327,9 @@ impl DownloadManager {
             }) = inner.downloads.get(&video_id)
             {
                 return Ok(false);
+            }
+            if !inner.batch.contains(&video_id) {
+                inner.join_batch([&video_id]);
             }
             inner.next_token += 1;
             let token = inner.next_token;
@@ -269,6 +357,9 @@ impl DownloadManager {
             Ok(()) => {
                 inner.tokens.remove(&video_id);
                 inner.downloads.remove(&video_id);
+                if inner.batch.contains(&video_id) {
+                    inner.batch_done.insert(video_id);
+                }
                 Ok(true)
             }
             Err(Stop::Cancelled) => Ok(false),
@@ -416,6 +507,7 @@ impl DownloadManager {
         let mut inner = self.inner();
         inner.tokens.remove(video_id);
         inner.downloads.remove(video_id);
+        inner.batch_done.remove(video_id);
     }
 
     /// Cancels `video_id` and removes its file and row. Blocks on the database.
@@ -428,6 +520,39 @@ impl DownloadManager {
             self.db.delete(&track)?;
         }
         Ok(())
+    }
+}
+
+impl DownloadManager {
+    /// Swift `deleteAll`: cancels every download and removes every saved file
+    /// and row. Blocks on the database.
+    pub fn delete_all(&self) -> rusqlite::Result<()> {
+        {
+            let mut inner = self.inner();
+            inner.tokens.clear();
+            inner.downloads.clear();
+            inner.batch.clear();
+            inner.batch_done.clear();
+        }
+        for track in self.db.fetch_all::<DownloadedTrackEntity>()? {
+            if let Some(path) = self.resolved_path(&track.local_path) {
+                let _ = std::fs::remove_file(path);
+            }
+            self.db.delete(&track)?;
+        }
+        Ok(())
+    }
+
+    /// Swift `totalStorageBytes`: the size of the saved files. Blocks on the database.
+    pub fn total_storage_bytes(&self) -> u64 {
+        self.db
+            .fetch_all::<DownloadedTrackEntity>()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|track| self.resolved_path(&track.local_path))
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|meta| meta.len())
+            .sum()
     }
 }
 

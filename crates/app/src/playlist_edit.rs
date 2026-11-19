@@ -913,7 +913,7 @@ pub(crate) fn pill<'a>(
         .into()
 }
 
-fn danger_button<'a>(label: &'a str, message: Message) -> Element<'a, Message> {
+pub(crate) fn danger_button<'a>(label: &'a str, message: Message) -> Element<'a, Message> {
     button(text(label).size(14).font(theme::weight(Weight::Bold)))
         .padding([8, 18])
         .on_press(message)

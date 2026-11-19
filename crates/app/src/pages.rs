@@ -212,6 +212,10 @@ pub fn album<'a>(
             true,
         )),
     )];
+    page.push(crate::downloads::collection_actions(
+        &album.browse_id,
+        songs,
+    ));
     page.extend(selectable(
         covers,
         songs,
@@ -259,6 +263,10 @@ pub fn playlist<'a>(
         (!songs.is_empty()).then(|| Message::PlayQueue(songs.clone(), 0)),
         Some(collections::actions(cx, songs, link, ("", ""), true, true)),
     )];
+    page.push(crate::downloads::collection_actions(
+        &playlist.playlist_id,
+        songs,
+    ));
     page.push(playlist_edit::actions(covers, edit, playlist, in_library));
     if edit.editing(&playlist.playlist_id) {
         page.push(playlist_edit::edit_tracks(
@@ -631,7 +639,11 @@ pub fn library<'a>(
         ),
     ]
     .spacing(12);
-    let mut page = vec![column![chips, shortcuts].spacing(20).into()];
+    let mut head = column![chips, shortcuts].spacing(20);
+    if let Some(card) = crate::downloads::library_card() {
+        head = head.push(card);
+    }
+    let mut page = vec![head.into()];
     let sections = [
         (LibraryFilter::Playlists, "Playlists", &library.playlists),
         (LibraryFilter::Albums, "Albums", &library.albums),

@@ -46,7 +46,9 @@ use trop::search::search_parser::{SearchParser, SearchSection};
 use trop::search::search_service::SearchService;
 use trop::services::comments_service::CommentsService;
 use trop::services::download_manager::{DownloadManager, Resolved};
+use trop::services::downloaded_collections::DownloadedCollections;
 use trop::services::personalization_service::{self, RadioOptions};
+use trop::services::playlist_song_edits::PlaylistSongEdits;
 use trop::services::sync_bridge::SyncBridge;
 use trop::settings::settings_store::SettingsStore;
 use trop::utilities::ui_image_color_extraction::{self as colors, Rgb};
@@ -655,8 +657,11 @@ impl Services {
 
     /// Saves `song` for offline play: `Ok(true)` once saved, `Ok(false)` if cancelled.
     pub async fn download(self: Arc<Self>, song: SongItem) -> Result<bool, String> {
-        let request =
-            StreamResolveRequest::download(&song.video_id, StreamResolveOptions::default());
+        let options = StreamResolveOptions {
+            download_quality: self.settings().download_quality,
+            ..StreamResolveOptions::default()
+        };
+        let request = StreamResolveRequest::download(&song.video_id, options);
         let resolve = async {
             StreamFallback::resolve_first_valid(
                 &request,
@@ -837,6 +842,56 @@ impl Services {
             .and_then(Result::ok)
             .map(|tracks| tracks.into_iter().map(|track| track.id).collect())
             .unwrap_or_default()
+    }
+
+    /// Which albums and playlists have their songs saved.
+    pub async fn downloaded_collections(self: Arc<Self>) -> DownloadedCollections {
+        blocking(move || DownloadedCollections::read(&self.db))
+            .await
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    }
+
+    /// Remembers an album's songs for `downloaded_collections` (Swift `saveSongs(_:ofAlbum:)`).
+    pub async fn save_album_songs(self: Arc<Self>, browse_id: String, song_ids: Vec<String>) {
+        blocking(move || DownloadedCollections::save_album_songs(&self.db, &browse_id, &song_ids))
+            .await;
+    }
+
+    /// The ids of a playlist's songs, under its bare and VL ids (Swift `removeDownloads(of:)`).
+    pub async fn playlist_song_ids(self: Arc<Self>, playlist_id: String) -> Vec<String> {
+        blocking(move || {
+            let bare = PlaylistSongEdits::bare_id(&playlist_id).to_owned();
+            self.db.read(|conn| {
+                conn.prepare("SELECT song_id FROM playlist_song_map WHERE playlist_id IN (?, ?)")?
+                    .query_map([&playlist_id, &bare], |row| row.get(0))?
+                    .collect()
+            })
+        })
+        .await
+        .and_then(Result::ok)
+        .unwrap_or_default()
+    }
+
+    /// Removes the saved songs `ids`, or every one when `ids` is `None` (Swift `deleteAll`).
+    pub async fn delete_downloads(self: Arc<Self>, ids: Option<Vec<String>>) -> Result<(), String> {
+        blocking(move || match ids {
+            Some(ids) => ids.iter().try_for_each(|id| self.downloads.delete(id)),
+            None => self.downloads.delete_all(),
+        })
+        .await
+        .ok_or("Deleting failed.")?
+        .map_err(|error| error.to_string())
+    }
+
+    /// Settings' storage card: bytes used and how many songs are saved.
+    pub async fn download_stats(self: Arc<Self>) -> (u64, usize) {
+        blocking(move || {
+            let count = self.downloads.tracks().map_or(0, |tracks| tracks.len());
+            (self.downloads.total_storage_bytes(), count)
+        })
+        .await
+        .unwrap_or_default()
     }
 
     pub async fn delete_download(self: Arc<Self>, video_id: String) -> Result<(), String> {

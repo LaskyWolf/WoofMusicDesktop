@@ -198,3 +198,56 @@ async fn download_again_after_cancel_survives_the_cancelled_run() {
     assert_eq!(std::fs::metadata(path).unwrap().len(), 200_000);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn a_batch_counts_saved_and_failed_songs_and_delete_all_empties_it() {
+    let dir = std::env::temp_dir().join(format!("woof-downloads-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let db = Arc::new(DatabaseService::open_in_memory());
+    let manager = DownloadManager::new(db.clone(), dir.clone());
+    let song = |id: &str| SongItem {
+        video_id: id.into(),
+        title: id.into(),
+        duration: 1,
+        ..SongItem::default()
+    };
+    // One song alone is not a batch: its own row shows enough.
+    manager.join_batch(&["vid_batch_a".into()]);
+    assert_eq!(manager.batch_progress(), None);
+    // A page's songs join together before the first one starts.
+    manager.join_batch(&["vid_batch_a".into(), "vid_batch_b".into()]);
+
+    let url = serve_once(vec![7; 20_000]);
+    assert_eq!(
+        manager
+            .download(song("vid_batch_a"), async {
+                Ok(resolved(url, "audio/webm"))
+            })
+            .await,
+        Ok(true)
+    );
+    let failed = manager
+        .download(song("vid_batch_b"), async { Err("no stream".to_owned()) })
+        .await;
+    assert!(failed.is_err());
+
+    let batch = manager.batch_progress().unwrap();
+    assert_eq!((batch.total, batch.completed, batch.failed), (2, 1, 1));
+    assert!(batch.is_done());
+    assert_eq!(batch.fraction, 1.0);
+    assert_eq!(
+        batch.failure_reason.as_deref(),
+        Some("This song has no stream to save. Try again later.")
+    );
+    assert_eq!(manager.total_storage_bytes(), 20_000);
+
+    // Closing the card ends the run; a new download starts a fresh one.
+    manager.clear_finished_batch();
+    assert_eq!(manager.batch_progress(), None);
+
+    manager.delete_all().unwrap();
+    assert!(manager.tracks().unwrap().is_empty());
+    assert!(manager.downloads().is_empty());
+    assert_eq!(manager.total_storage_bytes(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

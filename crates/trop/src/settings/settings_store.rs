@@ -4,13 +4,13 @@
 //!
 //! Not ported: theme mode and the left-handed tab bar (the desktop app has
 //! one dark look and no tab bar), player style, artwork swipe, Listen
-//! Together, downloads, translation, incognito and search history. The
+//! Together, Wi-Fi Only downloads (the desktop cannot tell a metered connection), translation, incognito and search history. The
 //! equalizer lives in `audio::now_playing::PlayerDefaults`.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use swiftytube::streaming::playback_quality::AudioQuality;
+use swiftytube::streaming::playback_quality::{AudioQuality, DownloadQuality};
 use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::library_sync_models::LibrarySyncOptions;
 
@@ -118,6 +118,13 @@ impl QuickPicksSize {
     }
 }
 
+/// `DownloadQuality`'s Swift `displayName`s, in menu order.
+pub const DOWNLOAD_QUALITIES: [(DownloadQuality, &str); 3] = [
+    (DownloadQuality::Auto, "Auto"),
+    (DownloadQuality::High, "High (128–192 kbps)"),
+    (DownloadQuality::Standard, "Standard (64–96 kbps)"),
+];
+
 /// Swift `ContentSettingsView.countries`.
 pub const COUNTRIES: [&str; 14] = [
     "US", "GB", "CA", "AU", "FR", "DE", "ES", "IT", "PT", "JP", "KR", "MX", "BR", "IN",
@@ -172,6 +179,16 @@ pub struct SettingsStore {
     /// The queue, shuffle and repeat come back at launch.
     #[serde(rename = "settings.persistQueue")]
     pub persist_queue: bool,
+
+    // Downloads
+    #[serde(rename = "settings.downloadQuality")]
+    pub download_quality: DownloadQuality,
+    /// Liking a song also saves it.
+    #[serde(rename = "settings.autoDownloadOnLike")]
+    pub auto_download_on_like: bool,
+    /// Opening a podcast saves its new episodes (at most 10).
+    #[serde(rename = "settings.autoDownloadNewEpisodes")]
+    pub auto_download_new_episodes: bool,
 
     // Radio: the options Start Radio last used.
     #[serde(rename = "settings.lastRadioStyle")]
@@ -243,6 +260,9 @@ impl Default for SettingsStore {
             persistent_play_pause: false,
             autoplay_similar: true,
             persist_queue: false,
+            download_quality: DownloadQuality::Auto,
+            auto_download_on_like: false,
+            auto_download_new_episodes: false,
             last_radio_style: RadioStyle::Similar,
             last_radio_limit: 25,
             last_radio_allow_explicit: true,
@@ -393,6 +413,21 @@ mod tests {
         assert!(settings.show_quick_picks);
         assert_eq!(settings.content_country, "US");
         assert_eq!(settings.lyrics_alignment, LyricsAlignment::Center);
+    }
+
+    #[test]
+    fn download_settings_default_to_swift_and_use_its_keys() {
+        let settings = SettingsStore::default();
+        assert_eq!(settings.download_quality, DownloadQuality::Auto);
+        assert!(!settings.auto_download_on_like && !settings.auto_download_new_episodes);
+        let raw = serde_json::to_string(&SettingsStore {
+            download_quality: DownloadQuality::Standard,
+            auto_download_on_like: true,
+            ..settings
+        })
+        .unwrap();
+        assert!(raw.contains(r#""settings.downloadQuality":"standard""#));
+        assert!(raw.contains(r#""settings.autoDownloadOnLike":true"#));
     }
 
     #[test]
