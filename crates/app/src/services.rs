@@ -140,6 +140,10 @@ impl Services {
         self.client.update_locale(YouTubeLocale::new(gl, hl));
         *self.lyrics.manager.settings.lock().unwrap() = settings.lyrics_settings();
         self.sync.set_options(settings.sync_options());
+        if let Some(player) = &self.player {
+            player.set_normalization(settings.audio_normalization);
+            player.set_persistent_play_pause(settings.persistent_play_pause);
+        }
         *self.settings.write().unwrap() = settings.clone();
     }
 
@@ -448,11 +452,12 @@ impl Services {
 
     /// A playable stream URL: VISIONOS first, cipher clients after.
     /// A downloaded song plays its saved file instead.
-    pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<String, String> {
+    /// The stream URL and its loudness (dB) for Audio Normalization.
+    pub async fn resolve(self: Arc<Self>, video_id: String) -> Result<(String, Option<f64>), String> {
         let this = self.clone();
         let id = video_id.clone();
         if let Some(Some(path)) = blocking(move || this.downloads.local_path(&id)).await {
-            return Ok(path.to_string_lossy().into_owned());
+            return Ok((path.to_string_lossy().into_owned(), None));
         }
         let options = StreamResolveOptions {
             audio_quality: self.settings().audio_quality,
@@ -466,7 +471,7 @@ impl Services {
             &self.providers,
         )
         .await
-        .map(|result| result.stream_url)
+        .map(|result| (result.stream_url, result.loudness_db))
         .map_err(|error| error.to_string())
     }
 
@@ -518,8 +523,9 @@ impl Services {
     pub async fn radio(
         self: Arc<Self>,
         video_id: String,
+        options: RadioOptions,
     ) -> Result<(Vec<SongItem>, usize), String> {
-        personalization_service::fetch_radio(&self.client, &video_id, RadioOptions::default()).await
+        personalization_service::fetch_radio(&self.client, &video_id, options).await
     }
 
     /// The saved playlists "Add to Playlist" offers (Swift `fetchPlaylists(limit: 100)`).
@@ -545,6 +551,21 @@ impl Services {
             .add_to_playlist(&playlist_id, &video_id, None)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// Swift `AddSongToPlaylistSheet.createAndAdd`.
+    pub async fn create_playlist_with(
+        self: Arc<Self>,
+        title: String,
+        video_id: String,
+    ) -> Result<(), String> {
+        let id = self
+            .sync
+            .mutations
+            .create_playlist(&title, None)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.add_to_playlist(id, video_id).await
     }
 
     /// The ids of the saved songs.

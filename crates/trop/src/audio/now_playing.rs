@@ -178,6 +178,79 @@ impl Queue {
         self.songs = Arc::new(original);
         self.reinsert_play_next(pending);
     }
+
+    /// True when `saved` holds this queue.
+    pub fn is_saved_as(&self, saved: &SavedQueue) -> bool {
+        *self.songs == saved.songs
+            && self.index == saved.index
+            && self.play_next_end == saved.play_next_end
+            && self.is_shuffle_on == saved.is_shuffle_on
+    }
+
+    pub fn saved(&self) -> SavedQueue {
+        SavedQueue {
+            songs: self.songs.to_vec(),
+            index: self.index,
+            play_next_end: self.play_next_end,
+            is_shuffle_on: self.is_shuffle_on,
+        }
+    }
+
+    /// Swift `restoreQueueIfNeeded`: the index clamped, Play Next kept only
+    /// when it is still ahead. `None` for an empty queue. The order from
+    /// before shuffle is not saved, so turning shuffle off keeps this order.
+    pub fn restored(saved: &SavedQueue) -> Option<Self> {
+        let last = saved.songs.len().checked_sub(1)?;
+        let index = saved.index.min(last);
+        Some(Self {
+            songs: Arc::new(saved.songs.clone()),
+            index,
+            is_shuffle_on: saved.is_shuffle_on,
+            is_repeat_on: false,
+            play_next_end: saved.play_next_end.filter(|end| *end > index && *end <= last),
+            original: None,
+        })
+    }
+}
+
+/// Swift's `nowPlaying.queue`, `queueIndex`, `playNextEnd` and `shuffle`.
+/// Repeat stays in `PlayerDefaults`, which the desktop app always keeps.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SavedQueue {
+    pub songs: Vec<SongItem>,
+    pub index: usize,
+    pub play_next_end: Option<usize>,
+    pub is_shuffle_on: bool,
+}
+
+impl SavedQueue {
+    pub fn default_path() -> Option<std::path::PathBuf> {
+        PlayerDefaults::default_path().map(|path| path.with_file_name("queue.json"))
+    }
+
+    /// A missing or unreadable file reads as an empty queue.
+    pub fn load(path: &std::path::Path) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Writes the queue, or removes the file for an empty one (Swift
+    /// `persistQueueState`).
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if self.songs.is_empty() {
+            return match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            };
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, serde_json::to_vec(self)?)
+    }
 }
 
 /// What the player remembers between launches. Swift keeps repeat in

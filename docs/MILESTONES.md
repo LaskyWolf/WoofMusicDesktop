@@ -70,7 +70,7 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Discord presence (local IPC), Last.fm and ListenBrainz scrobbling, Odesli song links; Settings page
 - [x] Everyday controls: volume (`PlayerVolumeSlider`), shuffle and repeat (`PlaybackQueue`), like button (`LikeStore`, `LikeFlavor`)
 - [x] Song menu: play next, add to queue, add to playlist, go to album or artist, share, start radio (`SongActionsMenu`)
-- [ ] Radio options (style, length, explicit) and New Playlist in Add to Playlist (`RadioOptions`, `RadioViews`)
+- [x] Radio options (style, length, explicit) and New Playlist in Add to Playlist (`RadioOptions`, `RadioViews`)
 - [ ] Restore the queue and the playing song at launch (`NowPlaying.restoreQueueIfNeeded`)
 - [ ] Queue editing: drag to reorder; remove is in the song menu (`QueueView`)
 - [x] Playlist editing: create, rename, delete, edit songs, cover, collaborators (`PlaylistSongEdits`, `PlaylistUpload`, `PlaylistCoverUploader`, `PlaylistCollaborators`, `PlaylistRemoval`)
@@ -84,7 +84,8 @@ Done when: the library matches WoofMusic on the iPhone with the same account.
 - [x] Settings pages: Appearance, Content, Player, Lyrics, Diagnostics
 - [ ] Lyrics menu: Edit Lyrics and Search Lyrics sheets; karaoke fill inside the current word (`LyricsOptionsMenu`, `KaraokeLineText`)
 - [ ] Share card looks: other backgrounds, frames and text styles, stickers, QR code, video (`ShareCardStudio`)
-- [ ] Settings without a desktop counterpart yet: accent colour, library layout, persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`)
+- [x] Player settings: persist queue, persistent play/pause, autoplay similar, audio normalization (`SettingsStore`, `NowPlaying`)
+- [ ] Settings without a desktop counterpart yet: accent colour, library layout, gapless playback (`SettingsStore`)
 - [ ] Profile and Recap (`Profile/`)
 - [ ] ListenTogether (`ListenTogether/`)
 

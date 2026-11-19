@@ -334,6 +334,15 @@ impl State {
         ui::scroll_page(vec![page.into()])
     }
 
+    /// A switch that saves `change` with its new state.
+    fn toggle<'a>(
+        &'a self,
+        on: bool,
+        change: fn(&mut SettingsStore, bool),
+    ) -> Element<'a, crate::Message> {
+        toggle(on, move |on| self.set(|p| change(p, on)))
+    }
+
     /// A copy of the settings with one change, as the message that saves it.
     fn set(&self, change: impl FnOnce(&mut SettingsStore)) -> crate::Message {
         let mut prefs = self.prefs.clone();
@@ -424,8 +433,42 @@ impl State {
                 ),
                 Some(toggle(skip_non_music, crate::Message::SkipNonMusic)),
             ),
+            plain(
+                "Audio Normalization",
+                self.toggle(self.prefs.audio_normalization, |p, on| {
+                    p.audio_normalization = on
+                }),
+            ),
         ]);
-        let mut list = vec![("Audio", "", audio)];
+        let queue = group(vec![
+            plain(
+                "Autoplay Similar",
+                self.toggle(self.prefs.autoplay_similar, |p, on| p.autoplay_similar = on),
+            ),
+            plain(
+                "Persist Queue",
+                self.toggle(self.prefs.persist_queue, |p, on| p.persist_queue = on),
+            ),
+        ]);
+        let play_pause = group(vec![plain(
+            "Persistent Play/Pause",
+            self.toggle(self.prefs.persistent_play_pause, |p, on| {
+                p.persistent_play_pause = on
+            }),
+        )]);
+        let mut list = vec![
+            ("Audio", "", audio),
+            (
+                "Queue",
+                "Persist Queue restores your queue, shuffle, and repeat state when the app relaunches.",
+                queue,
+            ),
+            (
+                "Playback",
+                "On: if the player is paused, a new song you pick stays paused. Off: the new song starts playing.",
+                play_pause,
+            ),
+        ];
         if let Some(transitions) = transitions {
             list.push((
                 "Transitions",

@@ -1,4 +1,4 @@
-use trop::audio::now_playing::Queue;
+use trop::audio::now_playing::{Queue, SavedQueue};
 use trop::networking::models::yt_item::SongItem;
 
 fn song(id: &str) -> SongItem {
@@ -91,4 +91,38 @@ fn remove_and_move_keep_the_current_song() {
     assert_eq!((ids(&queue), queue.index), (vec!["d", "b", "c"], 2));
     queue.move_song(2, 0);
     assert_eq!((ids(&queue), queue.index), (vec!["c", "d", "b"], 0));
+}
+
+#[test]
+fn a_saved_queue_comes_back_with_its_song_play_next_and_shuffle() {
+    let mut queue = Queue::default();
+    queue.set(&[song("a"), song("b"), song("c")], 0);
+    queue.enqueue_next(song("n"));
+    queue.is_shuffle_on = true;
+    let saved = queue.saved();
+    assert!(queue.is_saved_as(&saved));
+
+    let path = std::env::temp_dir().join(format!("woof-queue-{}.json", std::process::id()));
+    saved.save(&path).unwrap();
+    let restored = Queue::restored(&SavedQueue::load(&path)).unwrap();
+    assert!(restored.is_saved_as(&saved));
+    assert_eq!(restored.next_song().map(|s| s.video_id.as_str()), Some("n"));
+
+    // An empty queue removes the file, like Swift removing its keys.
+    SavedQueue::default().save(&path).unwrap();
+    assert!(!path.exists());
+    assert!(Queue::restored(&SavedQueue::load(&path)).is_none());
+}
+
+#[test]
+fn a_restored_index_is_clamped_and_a_stale_play_next_dropped() {
+    let saved = SavedQueue {
+        songs: vec![song("a"), song("b")],
+        index: 9,
+        play_next_end: Some(1),
+        is_shuffle_on: false,
+    };
+    let queue = Queue::restored(&saved).unwrap();
+    assert_eq!(queue.index, 1);
+    assert_eq!(queue.saved().play_next_end, None);
 }

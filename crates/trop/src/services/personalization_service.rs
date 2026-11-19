@@ -15,12 +15,33 @@ use crate::networking::models::yt_item::{SongItem, YTArtist, has_explicit_badge}
 /// Swift caps each panel at 50 songs.
 const PANEL_LIMIT: usize = 50;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RadioStyle {
     #[default]
     Similar,
     Variety,
     DeepCuts,
+}
+
+impl RadioStyle {
+    pub const ALL: [Self; 3] = [Self::Similar, Self::Variety, Self::DeepCuts];
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Similar => "Similar",
+            Self::Variety => "Variety",
+            Self::DeepCuts => "Deep Cuts",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Similar => "Closest matches to this song",
+            Self::Variety => "Wider mix around this song",
+            Self::DeepCuts => "Lesser-known related tracks",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

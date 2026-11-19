@@ -3,7 +3,6 @@
 // AutoMix play the next song on (`spare_deck`, `promote_spare`, `filter_chain`).
 //
 // Left out:
-// - Equalizer and loudness normalization in `filter_chain`: no settings for them yet.
 // - NowPlaying, PlaybackStateService, PlaybackSpeed, lock screen and remote
 //   commands live in the app.
 // - AVAudioSession, interruptions, route changes and `restoreAudioOutput`:
@@ -45,6 +44,12 @@ struct Shared {
     volume: f64,
     /// The equalizer's gains, `None` while it is off.
     equalizer: Option<Vec<f64>>,
+    /// Swift `audioNormalization`: songs play at `normalization_gain`.
+    normalization: bool,
+    /// The playing song's loudness from YouTube, in dB.
+    loudness: Option<f64>,
+    /// Swift `persistentPlayPause`: a song picked while paused stays paused.
+    persistent_play_pause: bool,
     /// The speed songs load at (Swift `PlaybackSpeed.rate`).
     speed: f64,
     /// While true, the outgoing song's end finishes the crossfade instead of
@@ -140,6 +145,9 @@ impl PlayerController {
             failed: false,
             volume: 1.0,
             equalizer: None,
+            normalization: false,
+            loudness: None,
+            persistent_play_pause: false,
             speed: 1.0,
             is_crossfading: false,
             events: DeckEvents::default(),
@@ -189,20 +197,22 @@ impl PlayerController {
 
     // MARK: - Playback
 
-    /// Plays `url` from `start` seconds (Swift `resumeOnLoad`), or from the beginning.
+    /// Plays `url` from `start` seconds (Swift `resumeOnLoad`), or from the
+    /// beginning. `loudness` is the stream's, for Audio Normalization.
     pub fn play(
         &self,
         url: &str,
         video_id: Option<&str>,
         start: Option<f64>,
+        loudness: Option<f64>,
     ) -> Result<(), libmpv2::Error> {
         let desired_playing = {
             let mut shared = lock(&self.shared);
             shared.failed = false;
-            // ponytail: Swift keeps a paused player paused here when the user
-            // turned on Persistent Play/Pause (R6 settings); always plays for now.
-            shared.desired_playing = true;
+            shared.desired_playing =
+                !shared.persistent_play_pause || shared.play_state != State::Paused;
             shared.pending_video_id = video_id.map(str::to_string);
+            shared.loudness = loudness;
             shared.desired_playing
         };
         log::info!("TRANSITION play videoId={}", video_id.unwrap_or("nil"));
@@ -213,7 +223,7 @@ impl PlayerController {
         mpv.set_property("volume", 100.0 * self.volume())?;
         mpv.set_property("speed", self.speed())?;
         mpv.set_property("start", start.map_or("none".to_string(), fmt))?;
-        self.apply_filters(&deck, None, None);
+        self.apply_filters(&deck, None, None, loudness);
         if let Err(error) = mpv.command("loadfile", &[url, "replace"]) {
             log::error!("mpv_command loadfile failed result={error}");
             return Err(error);
@@ -306,7 +316,7 @@ impl PlayerController {
 
     /// Makes the spare deck the playing one. The old deck keeps fading out
     /// as the new spare until the crossfade pauses it.
-    pub fn promote_spare(&self, video_id: &str) {
+    pub fn promote_spare(&self, video_id: &str, loudness: Option<f64>) {
         {
             let mut decks = lock(&self.decks);
             let Some(spare) = decks.spare.take() else {
@@ -318,6 +328,7 @@ impl PlayerController {
         let mut shared = lock(&self.shared);
         shared.current_video_id = Some(video_id.to_string());
         shared.pending_video_id = None;
+        shared.loudness = loudness;
     }
 
     /// Swift `isCrossfading`.
@@ -362,13 +373,28 @@ impl PlayerController {
     /// Turns the equalizer on with `gains`, or off with `None`. The playing
     /// song gets it now unless a mix runs; the next song loads with it.
     pub fn set_equalizer(&self, gains: Option<Vec<f64>>) {
-        let crossfading = {
-            let mut shared = lock(&self.shared);
-            shared.equalizer = gains;
-            shared.is_crossfading
+        lock(&self.shared).equalizer = gains;
+        self.refilter();
+    }
+
+    /// Turns Audio Normalization on or off, like `set_equalizer`.
+    pub fn set_normalization(&self, on: bool) {
+        lock(&self.shared).normalization = on;
+        self.refilter();
+    }
+
+    pub fn set_persistent_play_pause(&self, on: bool) {
+        lock(&self.shared).persistent_play_pause = on;
+    }
+
+    /// Rebuilds the playing song's filters unless a mix runs.
+    fn refilter(&self) {
+        let (crossfading, loudness) = {
+            let shared = lock(&self.shared);
+            (shared.is_crossfading, shared.loudness)
         };
         if !crossfading {
-            self.apply_filters(&self.active_deck(), None, None);
+            self.apply_filters(&self.active_deck(), None, None, loudness);
         }
     }
 
@@ -395,13 +421,20 @@ impl PlayerController {
     /// the whole chain when its FFmpeg build lacks a filter, so the chain is
     /// set again without the AutoMix effects, then without the bass filter,
     /// and mixes skip what is missing.
-    pub fn apply_filters(&self, deck: &MpvDeck, bass_gain: Option<f64>, echo_delay: Option<f64>) {
-        let (has_bass, has_effects, equalizer) = {
+    pub fn apply_filters(
+        &self,
+        deck: &MpvDeck,
+        bass_gain: Option<f64>,
+        echo_delay: Option<f64>,
+        loudness: Option<f64>,
+    ) {
+        let (has_bass, has_effects, equalizer, gain) = {
             let shared = lock(&self.shared);
             (
                 shared.has_bass_filter,
                 shared.has_effect_filters,
                 shared.equalizer.clone(),
+                normalization_gain(loudness).filter(|_| shared.normalization),
             )
         };
         let tiers = [(true, true), (false, true), (true, false), (false, false)]
@@ -410,7 +443,8 @@ impl PlayerController {
         let mut accepted = (false, false);
         let mut failure = None;
         for (bass, effects) in tiers {
-            let chain = filter_chain(bass_gain, echo_delay, bass, effects, equalizer.as_deref());
+            let chain =
+                filter_chain(bass_gain, echo_delay, bass, effects, equalizer.as_deref(), gain);
             match deck.set("af", &chain) {
                 Ok(()) => {
                     accepted = (bass, effects);
@@ -591,9 +625,9 @@ impl Drop for PlayerController {
     }
 }
 
-/// Swift `filterChain` without the equalizer and loudness filters: a bass
-/// filter (flat unless `bass_gain` is set), a high-pass and a low-pass
-/// (bypassed), and the echo and reverb sends of `effects_graph` (silent).
+/// Swift `filterChain`: a bass filter (flat unless `bass_gain` is set), a
+/// high-pass and a low-pass (bypassed), the echo and reverb sends of
+/// `effects_graph` (silent), the equalizer and the normalization `volume_gain`.
 /// Always present, so turning AutoMix on or off never rebuilds the filters of
 /// the playing song.
 pub fn filter_chain(
@@ -602,6 +636,7 @@ pub fn filter_chain(
     includes_bass: bool,
     includes_effects: bool,
     equalizer: Option<&[f64]>,
+    volume_gain: Option<f64>,
 ) -> String {
     let mut filters = Vec::new();
     if includes_bass {
@@ -621,7 +656,17 @@ pub fn filter_chain(
     if let Some(eq) = equalizer.and_then(crate::audio::equalizer::filter) {
         filters.push(eq);
     }
+    if let Some(gain) = volume_gain {
+        filters.push(format!("volume={}dB", fmt(gain)));
+    }
     filters.join(",")
+}
+
+/// Swift's normalization gain: brings the song to -14 dB, at most 12 dB either way.
+pub fn normalization_gain(loudness: Option<f64>) -> Option<f64> {
+    loudness
+        .filter(|l| l.is_finite())
+        .map(|l| (-14.0 - l).clamp(-12.0, 12.0))
 }
 
 /// Swift `effectsGraph`: the song split into a dry path and two sends, mixed

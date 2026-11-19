@@ -4,8 +4,7 @@
 //!
 //! Not ported: theme mode, accent colour and the left-handed tab bar
 //! (the desktop app has one dark look and no tab bar), player style, library
-//! layout, equalizer, gapless, normalization, persistent play/pause, persist
-//! queue, autoplay similar, artwork swipe, radio, Listen Together, downloads,
+//! layout, equalizer, gapless, artwork swipe, Listen Together, downloads,
 //! translation, incognito and search history.
 
 use std::path::{Path, PathBuf};
@@ -16,6 +15,7 @@ use swiftytube::sync::incremental_sync_service::IncrementalSyncService;
 use swiftytube::sync::library_sync_models::LibrarySyncOptions;
 
 use crate::audio::lyrics::lyrics_manager::LyricsSettings;
+use crate::services::personalization_service::{RadioOptions, RadioStyle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,6 +101,25 @@ pub struct SettingsStore {
     // Playback
     #[serde(rename = "settings.audioQuality")]
     pub audio_quality: AudioQuality,
+    #[serde(rename = "settings.audioNormalization")]
+    pub audio_normalization: bool,
+    /// A song picked while paused stays paused.
+    #[serde(rename = "settings.persistentPlayPause")]
+    pub persistent_play_pause: bool,
+    /// A radio of the last song plays when the queue runs out.
+    #[serde(rename = "settings.autoplaySimilar")]
+    pub autoplay_similar: bool,
+    /// The queue, shuffle and repeat come back at launch.
+    #[serde(rename = "settings.persistQueue")]
+    pub persist_queue: bool,
+
+    // Radio: the options Start Radio last used.
+    #[serde(rename = "settings.lastRadioStyle")]
+    pub last_radio_style: RadioStyle,
+    #[serde(rename = "settings.lastRadioLimit")]
+    pub last_radio_limit: usize,
+    #[serde(rename = "settings.lastRadioAllowExplicit")]
+    pub last_radio_allow_explicit: bool,
 
     // Content
     #[serde(rename = "settings.hideExplicit")]
@@ -145,6 +164,13 @@ impl Default for SettingsStore {
             romanize_current_track: true,
             karaoke_greeting_count: 0,
             audio_quality: AudioQuality::Auto,
+            audio_normalization: false,
+            persistent_play_pause: false,
+            autoplay_similar: true,
+            persist_queue: false,
+            last_radio_style: RadioStyle::Similar,
+            last_radio_limit: 25,
+            last_radio_allow_explicit: true,
             hide_explicit: false,
             show_quick_picks: true,
             content_country: "US".to_owned(),
@@ -189,6 +215,22 @@ impl SettingsStore {
             self.lyrics_provider_order.clone(),
             self.disabled_lyrics_providers.iter().cloned().collect(),
         )
+    }
+
+    /// Swift `RadioOptions.saved`.
+    pub fn radio_options(&self) -> RadioOptions {
+        RadioOptions {
+            style: self.last_radio_style,
+            limit: self.last_radio_limit,
+            allow_explicit: self.last_radio_allow_explicit,
+        }
+    }
+
+    /// Swift `RadioOptions.save`.
+    pub fn save_radio_options(&mut self, options: RadioOptions) {
+        self.last_radio_style = options.style;
+        self.last_radio_limit = options.limit;
+        self.last_radio_allow_explicit = options.allow_explicit;
     }
 
     /// Swift `SyncBridge` maps the five sync toggles onto the sync options.

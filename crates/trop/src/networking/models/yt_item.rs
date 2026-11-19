@@ -13,7 +13,7 @@ use super::home_page_parser::HomePageParser;
 use swiftytube::streaming::video_availability::VideoAvailability;
 use swiftytube::sync::artist_credits::{ArtistCredit, ArtistCredits};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct YTArtist {
     pub name: String,
     pub id: Option<String>,
@@ -290,7 +290,7 @@ impl YTItem {
 }
 
 /// Who added a song to a shared playlist.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlaylistContributor {
     pub name: String,
     pub is_owner: bool,
@@ -325,7 +325,8 @@ impl PlaylistContributor {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SongItem {
     pub video_id: String,
     pub title: String,

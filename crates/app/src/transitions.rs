@@ -160,7 +160,7 @@ impl Transitions {
         for (name, value) in crossfade::incoming_properties(plan) {
             let _ = deck.set(name, &value);
         }
-        player.apply_filters(&deck, plan.incoming_bass_gain(), plan.echo_delay);
+        player.apply_filters(&deck, plan.incoming_bass_gain(), plan.echo_delay, plan.loudness);
         let _ = deck.command("loadfile", &[&plan.url, "replace"]);
     }
 
@@ -194,8 +194,8 @@ async fn make_plan(
     next: String,
     playing: Option<String>,
 ) {
-    let url = services.resolve(next).await.ok();
-    let (Some(url), Some(playing)) = (url, playing) else {
+    let stream = services.resolve(next).await.ok();
+    let (Some((url, loudness)), Some(playing)) = (stream, playing) else {
         lock(&shared.state).plan_failed(token);
         return;
     };
@@ -209,8 +209,7 @@ async fn make_plan(
     lock(&shared.state).plan_ready(
         token,
         &url,
-        // ponytail: no loudness normalization yet, so the loudness is not read.
-        None,
+        loudness,
         tail.as_ref(),
         head.as_ref(),
         now,
@@ -368,7 +367,7 @@ fn promote_now(shared: &Shared, plan: &Plan) {
 }
 
 fn promoted(shared: &Shared, plan: &Plan) {
-    shared.player.promote_spare(&plan.to_id);
+    shared.player.promote_spare(&plan.to_id, plan.loudness);
     *lock(&shared.echo_delay) = plan.echo_delay;
     *lock(&shared.promoted) = Some(plan.to_id.clone());
 }

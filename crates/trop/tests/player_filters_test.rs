@@ -1,4 +1,6 @@
-use trop::audio::player_controller::player_controller::{effects_graph, filter_chain};
+use trop::audio::player_controller::player_controller::{
+    effects_graph, filter_chain, normalization_gain,
+};
 
 const REVERB: &str = "[verb]volume@verbsend=0,aecho=0.7:0.7:13|19|29|37:0.5|0.4|0.3|0.2,aecho=0:0.6:41|67|97|131|173|223|281|353|439|547|677|839:0.6|0.5|0.42|0.35|0.29|0.24|0.2|0.17|0.14|0.12|0.1|0.08[wet]";
 
@@ -22,24 +24,37 @@ fn effects_graph_matches_swift() {
 fn filter_chain_labels_each_automix_filter() {
     let graph = effects_graph(None);
     assert_eq!(
-        filter_chain(Some(-24.0), None, true, true, None),
+        filter_chain(Some(-24.0), None, true, true, None, None),
         format!(
             "@automixbass:bass=f=180:g=-24.0000,@automixhp:highpass=f=1000:m=0,@automixlp:lowpass=f=1000:m=0,@automixfx:lavfi=graph=%{}%{graph}",
             graph.len()
         )
     );
-    assert_eq!(filter_chain(None, None, false, false, None), "");
+    assert_eq!(filter_chain(None, None, false, false, None, None), "");
 }
 
 #[test]
 fn equalizer_goes_last_like_swift() {
     let gains = [7.0, 6.0, 4.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.5];
     assert_eq!(
-        filter_chain(None, None, false, false, Some(&gains)),
+        filter_chain(None, None, false, false, Some(&gains), None),
         "firequalizer=gain_entry=\"entry(60.0000,7.0000);entry(120.0000,6.0000);entry(250.0000,4.0000);entry(500.0000,2.0000);entry(1000.0000,1.0000);entry(2000.0000,0.0000);entry(4000.0000,0.0000);entry(8000.0000,0.0000);entry(12000.0000,0.0000);entry(16000.0000,-1.5000)\""
     );
     assert!(
-        filter_chain(Some(0.0), None, true, false, Some(&gains))
+        filter_chain(Some(0.0), None, true, false, Some(&gains), None)
             .starts_with("@automixbass:bass=f=180:g=0.0000,firequalizer=")
+    );
+}
+
+#[test]
+fn normalization_volume_goes_after_the_equalizer() {
+    assert_eq!(normalization_gain(Some(-8.5)), Some(-5.5));
+    assert_eq!(normalization_gain(Some(-40.0)), Some(12.0));
+    assert_eq!(normalization_gain(Some(f64::NAN)), None);
+    assert_eq!(normalization_gain(None), None);
+    let gains = [0.0; 10];
+    assert!(
+        filter_chain(None, None, false, false, Some(&gains), Some(-5.5))
+            .ends_with(",volume=-5.5000dB")
     );
 }

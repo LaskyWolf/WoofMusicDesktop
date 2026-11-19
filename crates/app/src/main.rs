@@ -34,7 +34,8 @@ use iced::{
 };
 use swiftytube::streaming::stream_cache::StreamCache;
 use trop::audio::crossfade::{NowPlayingState, TransitionSettings};
-use trop::audio::now_playing::{PlayerDefaults, Queue};
+use trop::audio::now_playing::{PlayerDefaults, Queue, SavedQueue};
+use trop::services::personalization_service::RadioOptions;
 use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::player_controller::player_controller::State as PlayState;
 use trop::audio::sleep_timer::SleepTimer;
@@ -335,6 +336,8 @@ struct App {
     sponsor: SponsorBlock,
     /// Where podcast episodes and long videos stopped.
     episodes: EpisodePlaybackStore,
+    /// The queue as last written to `queue.json` (Persist Queue).
+    saved_queue: SavedQueue,
     playlist_edit: playlist_edit::State,
     /// The lyrics options, karaoke greeting and share card.
     lyrics_extras: lyrics::State,
@@ -415,7 +418,7 @@ pub enum Message {
     Cover(String, Option<iced::widget::image::Handle>),
     /// Play `songs` from `index` on.
     PlayQueue(Arc<Vec<SongItem>>, usize),
-    Resolved(u64, Result<String, String>),
+    Resolved(u64, Result<(String, Option<f64>), String>),
     TogglePlay,
     Next,
     Previous,
@@ -551,6 +554,7 @@ impl App {
             speed: PlaybackSpeed::default(),
             sleep: SleepTimer::default(),
             sponsor: SponsorBlock::default(),
+            saved_queue: SavedQueue::default(),
             episodes: EpisodePlaybackStore::default_path()
                 .map(|path| EpisodePlaybackStore::load(&path))
                 .unwrap_or_default(),
@@ -558,6 +562,14 @@ impl App {
             lyrics_extras: lyrics::State::new(&services),
             settings,
         };
+        // Swift `restoreQueueIfNeeded`: back on the last song, not playing.
+        if app.settings.prefs.persist_queue
+            && let Some(saved) = SavedQueue::default_path().map(|path| SavedQueue::load(&path))
+            && let Some(queue) = Queue::restored(&saved)
+        {
+            app.player.queue = queue;
+            app.saved_queue = saved;
+        }
         app.player.queue.is_repeat_on = app.defaults.repeat;
         // Dev aid: WOOF_COMMENTS=1 opens the comments panel.
         app.comments.open = std::env::var("WOOF_COMMENTS").is_ok();
@@ -575,6 +587,7 @@ impl App {
             Err(_) => Task::none(),
         };
         let enter = app.enter();
+        let restored = app.song_changed();
         let saved = downloads::load(&services);
         // Dev aid: WOOF_SCROLL=px scrolls the page once it has loaded.
         let scroll = match std::env::var("WOOF_SCROLL")
@@ -591,6 +604,7 @@ impl App {
                 // Home loads once the saved session is back, so it is the account's Home.
                 Task::perform(services.restore(), Message::SessionReady),
                 enter,
+                restored,
                 search,
                 scroll,
                 snapshot_task(),
@@ -606,6 +620,27 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.persist_queue();
+        task
+    }
+
+    /// Swift `persistQueueState` after every change of the queue, while
+    /// Persist Queue is on.
+    // ponytail: writes on the UI thread; the file is small and changes only with the queue.
+    fn persist_queue(&mut self) {
+        if !self.settings.prefs.persist_queue || self.player.queue.is_saved_as(&self.saved_queue) {
+            return;
+        }
+        self.saved_queue = self.player.queue.saved();
+        if let Some(path) = SavedQueue::default_path()
+            && let Err(error) = self.saved_queue.save(&path)
+        {
+            log::warn!("Could not save the queue: {error}");
+        }
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TitleBar(message) => title_bar::update(message),
             Message::Resized(size) => {
@@ -705,7 +740,11 @@ impl App {
             Message::AddedToPlaylist(name, result) => match result {
                 Ok(()) => {
                     self.details.clear();
-                    self.notify(&format!("Added to {name}"))
+                    // The Library lists a new playlist and the new song count.
+                    Task::batch([
+                        self.notify(&format!("Added to {name}")),
+                        Task::perform(self.services.clone().load_library(), Message::LibraryLoaded),
+                    ])
                 }
                 Err(error) => {
                     log::warn!("Add to playlist failed: {error}");
@@ -1011,25 +1050,37 @@ impl App {
                 self.player.error = match (result, &self.services.player) {
                     (Err(error), _) => Some(error),
                     (Ok(_), None) => Some("The audio player (libmpv) did not start.".to_owned()),
-                    (Ok(url), Some(player)) => {
+                    (Ok((url, loudness)), Some(player)) => {
                         if let Some(song) = self.player.queue.song() {
                             player.set_speed(self.speed.select(&song.video_id, is_episode(song)));
                         }
                         player
-                            .play(&url, video_id.as_deref(), self.player.resume_at.take())
+                            .play(&url, video_id.as_deref(), self.player.resume_at.take(), loudness)
                             .err()
                             .map(|error| error.to_string())
                     }
                 };
                 self.read_player();
-                // Dev aid: WOOF_MENU=1 opens the playing song's menu.
-                let menu = match std::env::var("WOOF_MENU") {
+                // Dev aid: WOOF_MENU=1 opens the playing song's menu;
+                // =radio and =new-playlist open those pages of it.
+                let menu = match std::env::var("WOOF_MENU").as_deref() {
+                    Ok("radio") => Task::done(Message::MoreMenu)
+                        .chain(Task::done(Message::MenuAction(song_menu::Action::StartRadio))),
+                    Ok("new-playlist") => Task::done(Message::MoreMenu)
+                        .chain(Task::done(Message::MenuAction(song_menu::Action::NewPlaylist))),
                     Ok(_) => Task::done(Message::MoreMenu),
                     Err(_) => Task::none(),
                 };
                 Task::batch([self.dev_download(), menu])
             }
             Message::TogglePlay => {
+                // A queue restored at launch has nothing loaded yet.
+                if self.player.state == PlayState::Stopped
+                    && self.player.song().is_some()
+                    && !self.player.starting
+                {
+                    return self.start();
+                }
                 // A pause cuts a running crossfade short.
                 let finished = self.finish_transition();
                 if let Some(player) = &self.services.player {
@@ -1400,9 +1451,12 @@ impl App {
         let Some(song) = self.player.song() else {
             return Task::none();
         };
+        if !self.settings.prefs.autoplay_similar {
+            return Task::none();
+        }
         let video_id = song.video_id.clone();
         Task::perform(
-            self.services.clone().radio(video_id.clone()),
+            self.services.clone().radio(video_id.clone(), RadioOptions::default()),
             move |result| Message::AutoplayRadio(video_id, result),
         )
     }
@@ -1434,7 +1488,61 @@ impl App {
                     .add_to_playlist(playlist_id, song.video_id),
                 move |result| Message::AddedToPlaylist(name, result),
             ),
-            Action::StartRadio => self.start_radio(song),
+            Action::NewPlaylist => {
+                menu.page = song_menu::Page::NewPlaylist(String::new());
+                self.menu = Some(menu);
+                iced::widget::operation::focus(song_menu::NEW_PLAYLIST_INPUT)
+            }
+            Action::PlaylistName(name) => {
+                menu.page = song_menu::Page::NewPlaylist(name);
+                self.menu = Some(menu);
+                Task::none()
+            }
+            Action::CreatePlaylist => {
+                let song_menu::Page::NewPlaylist(name) = &menu.page else {
+                    return Task::none();
+                };
+                let title = name.trim().to_owned();
+                if title.is_empty() {
+                    self.menu = Some(menu);
+                    return Task::none();
+                }
+                Task::perform(
+                    self.services
+                        .clone()
+                        .create_playlist_with(title.clone(), song.video_id),
+                    move |result| Message::AddedToPlaylist(title.clone(), result),
+                )
+            }
+            Action::StartRadio => {
+                menu.page = song_menu::Page::Radio(self.settings.prefs.radio_options());
+                self.menu = Some(menu);
+                Task::none()
+            }
+            Action::RadioStyle(_) | Action::RadioLimit(_) | Action::RadioExplicit(_) => {
+                if let song_menu::Page::Radio(options) = &mut menu.page {
+                    match action {
+                        Action::RadioStyle(style) => options.style = style,
+                        Action::RadioLimit(limit) => options.limit = limit,
+                        Action::RadioExplicit(on) => options.allow_explicit = on,
+                        _ => {}
+                    }
+                }
+                self.menu = Some(menu);
+                Task::none()
+            }
+            Action::RadioStart => {
+                let song_menu::Page::Radio(options) = menu.page else {
+                    return Task::none();
+                };
+                let mut prefs = self.settings.prefs.clone();
+                prefs.save_radio_options(options);
+                Task::batch([
+                    self.settings
+                        .update(settings::Message::Change(prefs), &self.services),
+                    self.start_radio(song, options),
+                ])
+            }
             Action::GoTo(route) => {
                 self.queue_open = false;
                 self.now_playing = false;
@@ -1501,7 +1609,7 @@ impl App {
 
     /// Swift `PlaybackQueue.startRadio`: plays `song` unless it is playing,
     /// then fills the queue with its radio.
-    fn start_radio(&mut self, song: SongItem) -> Task<Message> {
+    fn start_radio(&mut self, song: SongItem, options: RadioOptions) -> Task<Message> {
         let video_id = song.video_id.clone();
         let play = if self
             .player
@@ -1514,7 +1622,7 @@ impl App {
             self.start()
         };
         let radio = Task::perform(
-            self.services.clone().radio(video_id.clone()),
+            self.services.clone().radio(video_id.clone(), options),
             move |result| Message::Radio(video_id, result),
         );
         Task::batch([play, radio, self.notify("Starting radio…")])
@@ -2740,6 +2848,7 @@ mod tests {
             sleep: SleepTimer::default(),
             sponsor: SponsorBlock::default(),
             episodes: EpisodePlaybackStore::default(),
+            saved_queue: SavedQueue::default(),
             report: None,
             feeds: feeds::Feeds::default(),
             comments: comments::Comments::default(),

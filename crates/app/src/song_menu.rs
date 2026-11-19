@@ -1,6 +1,6 @@
 //! The song menu (Swift `SongActionsMenu`): right-click a song, or the
 //! player bar's More button, to get Play Next, Add to Queue, Like, Add to
-//! Playlist, Start Radio, Go To and Share. The playing song's menu also
+//! Playlist, Start Radio (with its options), Go To and Share. The playing song's menu also
 //! has the Sleep Timer and Playback Speed.
 
 use std::time::Instant;
@@ -9,7 +9,9 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse, overlay, renderer};
 use iced::font::Weight;
-use iced::widget::{Space, button, column, container, mouse_area, row, scrollable, svg, text};
+use iced::widget::{
+    Space, button, column, container, mouse_area, row, scrollable, svg, text, text_input,
+};
 use iced::{
     Alignment, Background, Border, Element, Event, Length, Padding, Point, Rectangle, Size, Vector,
 };
@@ -17,6 +19,7 @@ use trop::audio::playback_speed::PlaybackSpeed;
 use trop::audio::sleep_timer::{self, SleepTimer};
 use trop::database::entities::playlist_entity::PlaylistEntity;
 use trop::networking::models::yt_item::SongItem;
+use trop::services::personalization_service::{RadioOptions, RadioStyle};
 
 use crate::{Message, Route, theme, ui};
 
@@ -42,8 +45,12 @@ pub enum Page {
     Actions,
     /// After Add to Playlist: the playlists, `None` while they load.
     Playlists(Option<Vec<PlaylistEntity>>),
+    /// New Playlist from Add to Playlist: the name typed so far.
+    NewPlaylist(String),
     Sleep,
     Speed,
+    /// Swift `RadioOptionsSheet`: the options Start Radio uses.
+    Radio(RadioOptions),
 }
 
 /// What the menu needs from the app to label its items.
@@ -65,7 +72,18 @@ pub enum Action {
     Like(bool),
     AddToPlaylist,
     AddTo(String, String),
+    NewPlaylist,
+    PlaylistName(String),
+    /// Creates the playlist with the typed name and adds the song.
+    CreatePlaylist,
+    /// Opens the radio options.
     StartRadio,
+    RadioStyle(RadioStyle),
+    /// Tracks: 5...50 in steps of 5.
+    RadioLimit(usize),
+    RadioExplicit(bool),
+    /// Starts the radio with the options on the page.
+    RadioStart,
     GoTo(Route),
     CopyLink,
     Download,
@@ -96,18 +114,22 @@ pub fn view<'a>(menu: &'a Menu, context: Context<'_>) -> Element<'a, Message> {
                 )
             })
             .collect(),
-        Page::Playlists(None) => vec![note("Loading playlists…")],
-        Page::Playlists(Some(list)) if list.is_empty() => vec![note("No playlists yet")],
-        Page::Playlists(Some(list)) => list
-            .iter()
-            .map(|playlist| {
-                item(
-                    icons::PLAYLIST,
-                    &playlist.name,
-                    Action::AddTo(playlist.id.clone(), playlist.name.clone()),
-                )
-            })
-            .collect(),
+        Page::Radio(options) => radio_items(options),
+        Page::Playlists(list) => {
+            let mut items = vec![item(icons::PLUS, "New Playlist…", Action::NewPlaylist)];
+            match list {
+                None => items.push(note("Loading playlists…")),
+                Some(list) => items.extend(list.iter().map(|playlist| {
+                    item(
+                        icons::PLAYLIST,
+                        &playlist.name,
+                        Action::AddTo(playlist.id.clone(), playlist.name.clone()),
+                    )
+                })),
+            }
+            items
+        }
+        Page::NewPlaylist(name) => new_playlist_items(name),
     };
     let rows = items.len() as f32;
     let height = (rows * ITEM + 2.0 * PAD).min(window.height - 2.0 * theme::INSET);
@@ -164,7 +186,7 @@ fn actions<'a>(menu: &Menu, context: &Context<'_>) -> Vec<Element<'a, Message>> 
             Action::AddToPlaylist,
         ));
     }
-    items.push(item(icons::RADIO, "Start Radio", Action::StartRadio));
+    items.push(item(icons::RADIO, "Start Radio…", Action::StartRadio));
     if let Some(id) = song.album_id.clone() {
         items.push(item(
             icons::ALBUM,
@@ -222,6 +244,77 @@ fn sleep_items<'a>(timer: &SleepTimer) -> Vec<Element<'a, Message>> {
     if timer.is_active() {
         items.push(item(icons::REMOVE, "Turn Off Timer", Action::Sleep(None)));
     }
+    items
+}
+
+/// Swift's New Playlist prompt: a name field, then Create.
+fn new_playlist_items<'a>(name: &str) -> Vec<Element<'a, Message>> {
+    let field = text_input("Playlist name", name)
+        .id(NEW_PLAYLIST_INPUT)
+        .on_input(|name| Message::MenuAction(Action::PlaylistName(name)))
+        .on_submit(Message::MenuAction(Action::CreatePlaylist))
+        .size(14)
+        .padding([6, 10])
+        .style(ui::field_style);
+    vec![
+        container(field).center_y(ITEM).padding([0, 4]).into(),
+        // Swift names the song; the menu is too narrow for a title.
+        note("Adds this song once created."),
+        item(icons::PLUS, "Create", Action::CreatePlaylist),
+    ]
+}
+
+/// The New Playlist name field, focused when it opens.
+pub const NEW_PLAYLIST_INPUT: &str = "menu-new-playlist";
+
+/// Swift `RadioOptionsSheet`: Style, Tracks and Include explicit, then Start.
+fn radio_items<'a>(options: &RadioOptions) -> Vec<Element<'a, Message>> {
+    let mut items: Vec<Element<'a, Message>> = RadioStyle::ALL
+        .iter()
+        .map(|&style| {
+            checked(
+                style.display_name(),
+                Action::RadioStyle(style),
+                options.style == style,
+            )
+        })
+        .collect();
+    items.push(note(options.style.description()));
+    let step = |icon, limit: usize| {
+        let enabled = (5..=50).contains(&limit);
+        button(ui::icon(icon, 16.0).style(move |_, _| svg::Style {
+            color: Some(if enabled { theme::TEXT } else { theme::SECONDARY }),
+        }))
+        .padding(6)
+        .on_press_maybe(enabled.then_some(Message::MenuAction(Action::RadioLimit(limit))))
+        .style(|_, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then_some(Background::Color(theme::PRESSED)),
+            border: Border::default().rounded(8),
+            ..button::Style::default()
+        })
+    };
+    let tracks = row![
+        text("Tracks")
+            .size(14)
+            .font(theme::weight(Weight::Medium))
+            .width(Length::Fill),
+        step(icons::MINUS, options.limit.saturating_sub(5)),
+        text(options.limit.to_string())
+            .size(14)
+            .color(theme::SECONDARY)
+            .width(28)
+            .align_x(Alignment::Center),
+        step(icons::PLUS, options.limit + 5),
+    ]
+    .align_y(Alignment::Center);
+    items.push(container(tracks).center_y(ITEM).padding(Padding { left: 10.0, right: 4.0, ..Padding::ZERO }).into());
+    items.push(checked(
+        "Include explicit",
+        Action::RadioExplicit(!options.allow_explicit),
+        options.allow_explicit,
+    ));
+    items.push(item(icons::RADIO, "Start Radio", Action::RadioStart));
     items
 }
 
@@ -438,6 +531,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
 
 /// Outline icons in the app's 2 px stroke; `ui::icon` tints them.
 pub mod icons {
+    pub const PLUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>"##;
+    pub const MINUS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>"##;
     pub const CHECK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     pub const MOON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>"##;
     pub const SPEED: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13l4-4"/></g></svg>"##;
