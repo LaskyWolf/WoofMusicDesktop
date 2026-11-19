@@ -51,6 +51,9 @@ impl SeenIds {
         if ids.is_empty() {
             return;
         }
+        // Read, change, write: two saves at once would drop one's ids.
+        static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _writing = WRITING.lock().unwrap_or_else(|e| e.into_inner());
         let mut saved = Self::load(path);
         saved.retain(|id| !ids.contains(id));
         let mut added: Vec<String> = ids.iter().cloned().collect();
@@ -147,6 +150,25 @@ mod tests {
             ActivityJson::last_thumbnail(Some(&thumbs)).as_deref(),
             Some("big")
         );
+    }
+
+    #[test]
+    fn saves_at_the_same_time_keep_every_id() {
+        let dir = std::env::temp_dir().join(format!("woof-activity-race-{}", std::process::id()));
+        let path = dir.join("activity_defaults.json");
+        let threads: Vec<_> = (0..16)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    SeenIds::save(&path, &HashSet::from([format!("release-{n}")]));
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(SeenIds::load(&path).len(), 16);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
