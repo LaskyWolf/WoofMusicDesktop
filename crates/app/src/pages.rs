@@ -19,7 +19,7 @@ use crate::playlist_edit;
 use crate::services::Library;
 use crate::settings;
 use crate::ui::{self, Covers};
-use crate::{Load, Message, Route, theme};
+use crate::{Message, Route, theme};
 use trop::settings::settings_store::LibraryLayout;
 
 /// Explore feed, or a mood's page: shelves of rows and cards, mood chips.
