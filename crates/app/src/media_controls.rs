@@ -36,7 +36,7 @@ fn start(window: &dyn window::Window) {
     let config = PlayerConfig::new("WoofMusic").desktop_entry(super::APP_ID);
     #[cfg(windows)]
     let config = {
-        use window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use window::raw_window_handle::RawWindowHandle;
         match window.window_handle().map(|handle| handle.as_raw()) {
             Ok(RawWindowHandle::Win32(handle)) => config.hwnd(handle.hwnd.get() as u64),
             _ => config,
